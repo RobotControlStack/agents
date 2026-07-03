@@ -3,6 +3,7 @@ import copy
 import json
 import logging
 import os
+import sys
 from collections import deque
 from dataclasses import dataclass, field
 from functools import partial, reduce
@@ -267,6 +268,192 @@ class LeRobotPolicy(Agent):
     def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
         info = super().reset(obs, instruction, **kwargs)
         self.policy.reset()
+        return info
+
+
+class ManiFlowPolicy(Agent):
+
+    def __init__(
+        self,
+        default_checkpoint_path: str = "",
+        device: str = "cuda:0",
+        execution_horizon: int = 1,
+        rename_map: dict[str, str] | None = None,
+        state_key: str | None = None,
+        unnorm_key: str | None = None,
+        return_normalized: bool = False,
+        apply_action_mode: bool = True,
+        use_bfloat16: bool = False,
+        include_instruction: bool | None = None,
+        num_ddim_steps: int | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(default_checkpoint_path=default_checkpoint_path, **kwargs)
+        self.device = device
+        self.execution_horizon = execution_horizon
+        self.rename_map = rename_map or {}
+        self.state_key = state_key
+        self.unnorm_key = unnorm_key
+        self.return_normalized = return_normalized
+        self.apply_action_mode = apply_action_mode
+        self.use_bfloat16 = use_bfloat16
+        self.include_instruction = include_instruction
+        self.num_ddim_steps = num_ddim_steps
+        self.path = self.checkpoint_path or self.default_checkpoint_path
+        if self.checkpoint_step is not None:
+            self.path = self.path.format(checkpoint_step=self.checkpoint_step)
+        self._cached_actions: deque[np.ndarray] = deque()
+
+    @staticmethod
+    def _ensure_hvla_on_path() -> None:
+        hvla_root = Path(__file__).resolve().parents[3] / "blocksuite" / "baselines" / "hvla"
+        if not hvla_root.exists():
+            raise FileNotFoundError(f"Could not locate HVLA source tree at {hvla_root}")
+        hvla_root_str = str(hvla_root)
+        if hvla_root_str not in sys.path:
+            sys.path.insert(0, hvla_root_str)
+
+    @staticmethod
+    def _to_chw(array: np.ndarray, *, scale: bool) -> np.ndarray:
+        array = np.asarray(array, dtype=np.float32)
+        if array.ndim == 3 and array.shape[0] not in (1, 3):
+            array = np.moveaxis(array, -1, 0)
+        if scale and array.max(initial=0.0) > 1.0:
+            array = array / 255.0
+        return array
+
+    def initialize(self):
+        import torch
+
+        self._ensure_hvla_on_path()
+        from hvla.model.framework.base_framework import baseframework
+
+        self.model = baseframework.from_pretrained(self.path).to(self.device).eval()
+        if self.use_bfloat16:
+            self.model = self.model.to(torch.bfloat16)
+
+        framework_cfg = getattr(self.model.config, "framework", None)
+        self.framework_name = getattr(framework_cfg, "name", self.model.__class__.__name__)
+        shape_meta = framework_cfg.get("shape_meta", {}) if framework_cfg is not None else {}
+        obs_meta = shape_meta.get("obs", {})
+        self.state_key = self.state_key or ("agent_pos" if "agent_pos" in obs_meta else None)
+        datasets_cfg = getattr(self.model.config, "datasets", None)
+        vla_data = getattr(datasets_cfg, "vla_data", None) if datasets_cfg is not None else None
+        self.action_mode = vla_data.get("action_mode", "abs") if vla_data is not None else "abs"
+        self.language_conditioned = bool(
+            framework_cfg is not None and framework_cfg.get("language_conditioned", False)
+        )
+
+    def _get_state(self, obs: Obs) -> np.ndarray | None:
+        state = obs.state
+        if state is None and self.state_key is not None:
+            state = obs.info.get(self.state_key)
+        if state is None:
+            state = obs.info.get("state", obs.info.get("joints"))
+        if state is None:
+            return None
+        return np.asarray(state, dtype=np.float32)
+
+    def _build_obs_dict(self, obs: Obs) -> dict[str, np.ndarray | list[str]]:
+        obs_dict: dict[str, np.ndarray | list[str]] = {}
+        for source_key, value in obs.cameras.items():
+            key = self.rename_map.get(source_key, source_key)
+            array = np.array(value, copy=True)
+            scale = key.endswith("_rgb")
+            if array.ndim == 3:
+                array = self._to_chw(array, scale=scale)
+            else:
+                array = np.asarray(array, dtype=np.float32)
+            obs_dict[key] = array[None, None, ...]
+
+        state = self._get_state(obs)
+        if state is not None and self.state_key is not None:
+            obs_dict[self.state_key] = state[None, None, ...]
+
+        if self.include_instruction is True or (self.include_instruction is None and self.language_conditioned):
+            obs_dict["task_name"] = [self.instruction]
+        return obs_dict
+
+    @staticmethod
+    def _extract_actions(result: Any) -> np.ndarray:
+        if isinstance(result, dict):
+            result = result.get("normalized_actions", result.get("action", result))
+        if hasattr(result, "detach"):
+            result = result.detach().cpu().float().numpy()
+        actions = np.asarray(result, dtype=np.float32)
+        if actions.ndim == 3:
+            return actions[0]
+        if actions.ndim == 2:
+            return actions
+        if actions.ndim == 1:
+            return actions[None, :]
+        raise ValueError(f"Unsupported action output shape {actions.shape}")
+
+    def _denormalize_actions(self, normalized_actions: np.ndarray, obs: Obs) -> np.ndarray:
+        if self.return_normalized:
+            return normalized_actions
+
+        actions = self.model.unnormalize_actions(
+            normalized_actions.copy(),
+            self.model.get_action_stats(unnorm_key=self.unnorm_key),
+        ).astype(np.float32)
+        if not self.apply_action_mode:
+            return actions
+
+        state = self._get_state(obs)
+        if state is None or state.shape[-1] != actions.shape[-1]:
+            return actions
+        if self.action_mode == "rel":
+            return actions + state[None, :]
+        if self.action_mode == "delta":
+            out = np.zeros_like(actions)
+            out[0] = actions[0] + state
+            for idx in range(1, len(actions)):
+                out[idx] = actions[idx] + out[idx - 1]
+            return out
+        return actions
+
+    def _predict_chunk(self, obs: Obs) -> tuple[np.ndarray, np.ndarray]:
+        import torch
+
+        obs_dict = self._build_obs_dict(obs)
+        with torch.inference_mode():
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.use_bfloat16 and "cuda" in self.device):
+                if hasattr(self.model, "predict_action"):
+                    kwargs = {"examples": {"obs": obs_dict}}
+                    if self.num_ddim_steps is not None:
+                        kwargs["num_ddim_steps"] = self.num_ddim_steps
+                    result = self.model.predict_action(**kwargs)
+                elif hasattr(self.model, "policy") and hasattr(self.model.policy, "predict_action"):
+                    result = self.model.policy.predict_action(obs_dict)
+                else:
+                    raise AttributeError(f"{self.framework_name} does not expose a supported predict_action interface")
+
+        normalized = self._extract_actions(result)
+        return self._denormalize_actions(normalized, obs), normalized
+
+    def act(self, obs: Obs) -> Act:
+        super().act(obs)
+        if self._cached_actions:
+            return Act(action=self._cached_actions.popleft().astype(np.float32), done=False, info={})
+
+        action_chunk, normalized_chunk = self._predict_chunk(obs)
+        horizon = max(1, min(self.execution_horizon, len(action_chunk)))
+        for action in action_chunk[1:horizon]:
+            self._cached_actions.append(np.asarray(action, dtype=np.float32))
+        return Act(
+            action=np.asarray(action_chunk[0], dtype=np.float32),
+            done=False,
+            info={
+                "action_chunk": action_chunk,
+                "normalized_action_chunk": normalized_chunk,
+                "framework_name": self.framework_name,
+            },
+        )
+
+    def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
+        info = super().reset(obs, instruction, **kwargs)
+        self._cached_actions.clear()
         return info
 
 
