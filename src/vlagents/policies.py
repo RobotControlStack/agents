@@ -3,6 +3,7 @@ import copy
 import json
 import logging
 import os
+import sys
 from collections import deque
 from dataclasses import dataclass, field
 from functools import partial, reduce
@@ -267,6 +268,131 @@ class LeRobotPolicy(Agent):
     def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
         info = super().reset(obs, instruction, **kwargs)
         self.policy.reset()
+        return info
+
+
+class ManiFlowPolicy(Agent):
+    """vlagents wrapper around the ManiFlow inference adapter.
+
+    Rather than re-implementing ManiFlow's normalization, this delegates to
+    ``blocksuite.serving.serve_maniflow_policy.ManiFlowInferAdapter`` (built via
+    ``load_safetensors_policy``), which owns state q99-normalization, per-key
+    action denormalization, relative->absolute cumsum, and gripper/pd_mode
+    binarization. This class only translates a vlagents :class:`Obs` into the
+    adapter's obs dict and buffers the returned action chunk.
+    """
+
+    def __init__(
+        self,
+        default_checkpoint_path: str = "",
+        device: str = "cuda:0",
+        stats_path: str = "",
+        config: str | None = None,
+        train_config: str | None = None,
+        action_mode: str | None = None,
+        use_ema: bool = False,
+        num_inference_steps: int | None = None,
+        execution_horizon: int = 1,
+        rename_map: dict[str, str] | None = None,
+        state_key: str = "agent_pos",
+        include_instruction: bool | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(default_checkpoint_path=default_checkpoint_path, **kwargs)
+        self.device = device
+        self.stats_path = stats_path
+        self.config = config
+        self.train_config = train_config
+        self.action_mode = action_mode
+        self.use_ema = use_ema
+        self.num_inference_steps = num_inference_steps
+        self.execution_horizon = execution_horizon
+        self.rename_map = rename_map or {}
+        self.state_key = state_key
+        self.include_instruction = include_instruction
+        self.path = self.checkpoint_path or self.default_checkpoint_path
+        if self.checkpoint_step is not None:
+            self.path = self.path.format(checkpoint_step=self.checkpoint_step)
+        self._cached_actions: deque[np.ndarray] = deque()
+
+    @staticmethod
+    def _ensure_hvla_on_path() -> None:
+        hvla_root = Path(__file__).resolve().parents[3] / "blocksuite" / "baselines" / "hvla"
+        if not hvla_root.exists():
+            raise FileNotFoundError(f"Could not locate HVLA source tree at {hvla_root}")
+        hvla_root_str = str(hvla_root)
+        if hvla_root_str not in sys.path:
+            sys.path.insert(0, hvla_root_str)
+
+    def initialize(self):
+        self._ensure_hvla_on_path()
+        # The adapter loader reads this env var to override the checkpoint's
+        # num_inference_steps (see load_safetensors_policy).
+        if self.num_inference_steps is not None:
+            os.environ["NUM_INFERENCE_STEPS"] = str(self.num_inference_steps)
+
+        from blocksuite.serving.serve_maniflow_policy import Args, load_safetensors_policy
+
+        args = Args(
+            checkpoint=self.path,
+            config=self.config,
+            train_config=self.train_config,
+            use_ema=self.use_ema,
+            stats_path=self.stats_path,
+            action_mode=self.action_mode,
+        )
+        self.adapter = load_safetensors_policy(args)
+        # Honour the requested device (the adapter defaults to cuda-if-available);
+        # infer() reads the device off the policy parameters.
+        self.adapter._policy.to(self.device)
+
+        self.language_conditioned = bool(getattr(self.adapter._policy, "language_conditioned", False))
+
+    def _build_obs_dict(self, obs: Obs) -> dict[str, Any]:
+        # The adapter's infer() expects raw HWC uint8 images (it resizes to 224
+        # and converts to CHW [0,1] itself) and a 1-D state under state_key; it
+        # adds the leading (1, 1) batch/time dims for unbatched inputs.
+        obs_dict: dict[str, Any] = {}
+        for source_key, value in obs.cameras.items():
+            key = self.rename_map.get(source_key, source_key)
+            obs_dict[key] = np.asarray(value)
+
+        state = obs.state
+        if state is None:
+            state = obs.info.get(self.state_key)
+        if state is not None:
+            obs_dict[self.state_key] = np.asarray(state, dtype=np.float32).reshape(-1)
+
+        if self.include_instruction is True or (self.include_instruction is None and self.language_conditioned):
+            obs_dict["task_name"] = [self.instruction]
+        return obs_dict
+
+    def act(self, obs: Obs) -> Act:
+        super().act(obs)
+        if self._cached_actions:
+            return Act(action=self._cached_actions.popleft().astype(np.float32), done=False, info={})
+
+        result = self.adapter.infer(self._build_obs_dict(obs))
+        actions = np.asarray(result["actions"], dtype=np.float32)
+        # The adapter transposes (B, T, D) -> (T, B, D) for batched envs; a
+        # single-obs vlagents call has B == 1, so drop the batch axis.
+        if actions.ndim == 3:
+            actions = actions[:, 0, :]
+
+        horizon = max(1, min(self.execution_horizon, len(actions)))
+        for action in actions[1:horizon]:
+            self._cached_actions.append(np.asarray(action, dtype=np.float32))
+        return Act(
+            action=np.asarray(actions[0], dtype=np.float32),
+            done=False,
+            info={"action_chunk": actions},
+        )
+
+    def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
+        info = super().reset(obs, instruction, **kwargs)
+        self._cached_actions.clear()
+        if hasattr(self, "adapter"):
+            self.adapter.reset()
         return info
 
 
@@ -823,4 +949,5 @@ AGENTS = dict(
     openvladist=OpenVLADistribution,
     openpi=OpenPiModel,
     vjepa=VjepaAC,
+    maniflow=ManiFlowPolicy,
 )
