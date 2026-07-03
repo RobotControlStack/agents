@@ -170,6 +170,8 @@ python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"
 # lerobot xvla
 uv run python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "xvla", "checkpoint_path": "<path to pretrained_model>", "n_action_steps": 1, "rename_map": {"head": "image", "left_wrist": "image2", "right_wrist": "image3"}}'
 
+# maniflow / hvla
+python -m vlagents start-server maniflow --port 8080 --host 0.0.0.0 --kwargs '{"checkpoint_path": "<path to model.safetensors>", "device": "cuda:0", "rename_map": {"base": "head_rgb"}}'
 
 # octo
 python -m vlagents start-server octo --host localhost --port 8080 --kwargs '{"checkpoint_path": "hf://Juelg/octo-base-1.5-finetuned-maniskill", "checkpoint_step": None, "horizon": 1, "unnorm_key": []}'
