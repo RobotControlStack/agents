@@ -36,7 +36,7 @@ class Obs:
     camera_data_type: str = CameraDataType.RAW
     gripper: float | None = None
     # TODO: add context about what the state means, and its dimensions
-    # theoratically it would be joints, xyzrpy and absolute or relative
+    # theoretically it would be joints, xyzrpy and absolute or relative
     state: np.ndarray | None = None
     info: dict[str, Any] = field(default_factory=dict)
 
@@ -317,12 +317,17 @@ class ManiFlowPolicy(Agent):
 
     @staticmethod
     def _ensure_hvla_on_path() -> None:
-        hvla_root = Path(__file__).resolve().parents[3] / "blocksuite" / "baselines" / "hvla"
-        if not hvla_root.exists():
-            raise FileNotFoundError(f"Could not locate HVLA source tree at {hvla_root}")
-        hvla_root_str = str(hvla_root)
-        if hvla_root_str not in sys.path:
-            sys.path.insert(0, hvla_root_str)
+        # hvla is normally an editable install, so prefer the plain import.
+        try:
+            import hvla  # noqa: F401
+
+            return
+        except ImportError:
+            pass
+        # Fallback: add the in-repo source tree (repo_root/baselines/hvla).
+        hvla_root = Path(__file__).resolve().parents[3] / "baselines" / "hvla"
+        if hvla_root.exists() and str(hvla_root) not in sys.path:
+            sys.path.insert(0, str(hvla_root))
 
     def initialize(self):
         self._ensure_hvla_on_path()
