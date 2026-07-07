@@ -16,6 +16,8 @@ import numpy as np
 import simplejpeg
 from PIL import Image
 
+DEBUG_LOG_PATH = Path("/tmp/pi05_debug.log")
+
 
 @dataclass(kw_only=True)
 class SharedMemoryPayload:
@@ -153,6 +155,10 @@ class LeRobotPolicy(Agent):
         n_action_steps: int = 30,
         temporal_ensemble_coeff: float | None = None,
         rename_map: dict[str, str] | None = None,
+        dataset_stats_repo_id: str | None = None,
+        openpi_norm_stats_checkpoint: str | None = None,
+        openpi_norm_stats_asset: str = "droid",
+        state_dim: int = 8,
         **kwargs,
     ) -> None:
         super().__init__(default_checkpoint_path=default_checkpoint_path, **kwargs)
@@ -161,6 +167,16 @@ class LeRobotPolicy(Agent):
         self.device = device
         self.n_action_steps = n_action_steps
         self.temporal_ensemble_coeff = temporal_ensemble_coeff
+        # The published pi05 checkpoints do NOT bundle normalization statistics, so the
+        # pre/post processors would otherwise load with empty stats and silently skip
+        # STATE/ACTION (un)normalization. Two ways to supply the missing stats:
+        #  - dataset_stats_repo_id: derive them from a LeRobot dataset (approximate).
+        #  - openpi_norm_stats_checkpoint: use OpenPI's published stats for the exact
+        #    checkpoint the weights were ported from (authoritative; preferred).
+        self.dataset_stats_repo_id = dataset_stats_repo_id
+        self.openpi_norm_stats_checkpoint = openpi_norm_stats_checkpoint
+        self.openpi_norm_stats_asset = openpi_norm_stats_asset
+        self.state_dim = state_dim
         checkpoint_path = self.checkpoint_path or self.default_checkpoint_path
         if self.checkpoint_step is not None:
             checkpoint_path = checkpoint_path.format(checkpoint_step=self.checkpoint_step)
@@ -171,11 +187,123 @@ class LeRobotPolicy(Agent):
         else:
             self.rename_map = {}
 
-        # self.rename_map = {
-        #     "head": "image",
-        #     "left_wrist": "image2",
-        #     "right_wrist": "image3",
-        # }
+        self.rename_map = {
+            "base": "base_0_rgb",
+            "wrist": "left_wrist_0_rgb",
+            # "wrist_right": "right_wrist_0_rgb",
+        }
+        self._debug_counter = 0
+
+    def _load_dataset_stats(self) -> dict | None:
+        """Load normalization stats from the training dataset and pad them to the model's
+        padded state/action dims. Returns None if no stats repo is configured.
+
+        pi05 checkpoints ship without stats, so without this the NormalizerProcessorStep
+        loads with empty stats and STATE/ACTION (un)normalization becomes a no-op.
+        """
+        if self.dataset_stats_repo_id is None:
+            return None
+
+        import torch
+        from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+
+        meta = LeRobotDatasetMetadata(self.dataset_stats_repo_id)
+        raw = meta.stats
+        # State enters the model at its native dim (8 for single-arm DROID) and is discretized
+        # as-is into the prompt, so state stats stay native. The model emits a padded action
+        # (max_action_dim, e.g. 32), so action stats must be padded to match for unnormalization.
+        max_action_dim = getattr(self.policy.config, "max_action_dim", 32)
+
+        def make(name, dim=None):
+            src = raw[name]
+            out = {}
+            # fills chosen so padded dims (un)normalize to ~0 (identity) and never divide by zero
+            fills = {"mean": 0.0, "std": 1.0, "q01": -1.0, "q99": 1.0, "min": -1.0, "max": 1.0}
+            for stat, fill in fills.items():
+                if stat not in src:
+                    continue
+                v = torch.as_tensor(np.asarray(src[stat]), dtype=torch.float32).flatten()
+                if dim is not None and v.shape[0] < dim:
+                    v = torch.cat([v, torch.full((dim - v.shape[0],), fill, dtype=torch.float32)])
+                out[stat] = v
+            return out
+
+        return {
+            "observation.state": make("observation.state"),
+            "action": make("action", max_action_dim),
+        }
+
+    def _load_openpi_norm_stats(self) -> dict | None:
+        """Load OpenPI's published normalization stats for a pi0/pi05 checkpoint.
+
+        OpenPI stores the *exact* training normalization in a public GCS bucket at
+        ``checkpoints/<ckpt>/assets/<asset>/norm_stats.json``. This is the distribution
+        the ported LeRobot weights were trained on, so it matches the checkpoint far
+        better than stats re-derived from a LeRobot dataset mirror.
+
+        Important detail for DROID: the ACTION stats describe *relative* joint targets
+        for the 7 arm joints (mean ~= 0, symmetric range == a per-step delta) and an
+        absolute value for the gripper, whereas the STATE stats are absolute joint
+        positions. So after unnormalization the arm action is a delta to be applied on
+        top of the current joint positions (see the client's action mapping).
+
+        Returns None if no OpenPI checkpoint is configured.
+        """
+        if self.openpi_norm_stats_checkpoint is None:
+            return None
+
+        import urllib.request
+
+        import torch
+
+        ckpt = self.openpi_norm_stats_checkpoint
+        asset = self.openpi_norm_stats_asset
+        url = (
+            "https://storage.googleapis.com/openpi-assets/"
+            f"checkpoints/{ckpt}/assets/{asset}/norm_stats.json"
+        )
+        cache_path = Path("/tmp") / f"openpi_{ckpt}_{asset}_norm_stats.json"
+        if not cache_path.exists():
+            urllib.request.urlretrieve(url, cache_path)
+        norm = json.loads(cache_path.read_text(encoding="utf-8"))["norm_stats"]
+
+        # State is normalized at its native dim (before the tokenizer pads it to
+        # max_state_dim), so slice state stats to the real state dim. The model emits a
+        # padded action (max_action_dim), so keep the full-width action stats; OpenPI
+        # pads the unused dims with zeros and the quantile (un)normalizer maps those to
+        # ~0 via its eps guard.
+        max_action_dim = getattr(self.policy.config, "max_action_dim", 32)
+
+        def to_stats(entry: dict, dim: int | None) -> dict:
+            out = {}
+            for stat in ("mean", "std", "q01", "q99"):
+                if stat not in entry:
+                    continue
+                v = torch.as_tensor(np.asarray(entry[stat]), dtype=torch.float32).flatten()
+                if dim is not None:
+                    v = v[:dim]
+                out[stat] = v
+            return out
+
+        return {
+            "observation.state": to_stats(norm["state"], self.state_dim),
+            "action": to_stats(norm["actions"], max_action_dim),
+        }
+
+    def _should_debug_log(self) -> bool:
+        return self._debug_counter < 5 or self._debug_counter % 20 == 0
+
+    def _debug_log(self, message: str) -> None:
+        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(message + "\n")
+
+    def _log_camera_stats(self, camera_name: str, image: np.ndarray) -> None:
+        channel_mean = image.reshape(-1, image.shape[-1]).mean(axis=0).round(2).tolist()
+        self._debug_log(
+            "lerobot debug camera="
+            f"{camera_name} shape={tuple(image.shape)} dtype={image.dtype} "
+            f"min={int(image.min())} max={int(image.max())} channel_mean={channel_mean}"
+        )
 
     def initialize(self):
         from collections import deque
@@ -213,7 +341,7 @@ class LeRobotPolicy(Agent):
             key: v2.Compose(
                 [
                     v2.ToImage(),
-                    v2.Resize((height, width)),
+                    # v2.Resize((height, width)),
                     v2.ToDtype(torch.float32, scale=True),
                     v2.ToPureTensor(),
                 ]
@@ -229,44 +357,145 @@ class LeRobotPolicy(Agent):
             # "rename_observations_processor": {"rename_map": self.rename_map},
         }
 
-        self.preprocessor, self.postprocessor = make_pre_post_processors(
-            policy_cfg=self.policy.config,
-            pretrained_path=self.path,
-            preprocessor_overrides=preprocessor_overrides,
+        # Prefer OpenPI's authoritative stats when configured, otherwise fall back to
+        # dataset-derived stats.
+        dataset_stats = self._load_openpi_norm_stats() or self._load_dataset_stats()
+        norm_stats_source = (
+            f"openpi:{self.openpi_norm_stats_checkpoint}/{self.openpi_norm_stats_asset}"
+            if self.openpi_norm_stats_checkpoint is not None
+            else self.dataset_stats_repo_id
         )
+        if self.policy_name == "pi05" and dataset_stats is not None:
+            # Build the pi05 pipeline directly from the config + real dataset stats. The
+            # pretrained checkpoint ships empty stats, so loading via `pretrained_path`
+            # would leave (un)normalization as a silent no-op.
+            from lerobot.policies.pi05.processor_pi05 import make_pi05_pre_post_processors
+
+            # the factory builds its DeviceProcessorStep from config.device
+            self.policy.config.device = self.device
+            self.preprocessor, self.postprocessor = make_pi05_pre_post_processors(
+                config=self.policy.config,
+                dataset_stats=dataset_stats,
+            )
+        else:
+            self.preprocessor, self.postprocessor = make_pre_post_processors(
+                policy_cfg=self.policy.config,
+                pretrained_path=self.path,
+                preprocessor_overrides=preprocessor_overrides,
+            )
+        DEBUG_LOG_PATH.write_text("", encoding="utf-8")
+        norm_keys = []
+        for step in self.preprocessor.steps:
+            if "Normalizer" in type(step).__name__:
+                norm_keys = list(getattr(step, "_tensor_stats", {}).keys())
+        self._debug_log(
+            "lerobot debug initialized "
+            f"checkpoint={self.path} "
+            f"image_features={sorted(self._expected_image_shapes.keys())} "
+            f"n_action_steps={self.policy.config.n_action_steps} "
+            f"chunk_size={getattr(self.policy.config, 'chunk_size', None)} "
+            f"norm_stats_source={norm_stats_source} "
+            f"norm_stats_keys={norm_keys}"
+        )
+        if dataset_stats is not None:
+            for key in ("observation.state", "action"):
+                s = dataset_stats.get(key, {})
+                q01 = s.get("q01")
+                q99 = s.get("q99")
+                if q01 is not None and q99 is not None:
+                    self._debug_log(
+                        f"lerobot debug normstats {key} "
+                        f"q01_first8={np.array2string(np.asarray(q01)[:8], precision=4, suppress_small=True)} "
+                        f"q99_first8={np.array2string(np.asarray(q99)[:8], precision=4, suppress_small=True)}"
+                    )
 
     def act(self, obs: Obs) -> Act:
         import torch
 
         super().act(obs)
+        self._debug_counter += 1
+
+        if self._should_debug_log():
+            self._debug_log(
+                "lerobot debug act "
+                f"step={self.step} "
+                f"task={self.instruction!r} "
+                f"camera_keys={sorted(obs.cameras.keys())} "
+                f"state_shape={None if obs.state is None else tuple(obs.state.shape)} "
+                f"state_min={float(np.min(obs.state)):.5f} "
+                f"state_max={float(np.max(obs.state)):.5f} "
+                f"state_mean={float(np.mean(obs.state)):.5f}"
+            )
 
         observation = {
             "observation.state": torch.as_tensor(np.array(obs.state, copy=True)).to(torch.float32),
             "task": self.instruction,
         }
 
+        # breakpoint()
         for key, img_data in obs.cameras.items():
             expected_shape = self._expected_image_shapes.get(self.rename_map.get(key, key))
+            # print(self._expected_image_shapes)
+            # breakpoint()
             assert expected_shape is not None
+            img_np = np.array(img_data, copy=True)
+            if self._should_debug_log():
+                self._log_camera_stats(key, img_np)
             observation[f"observation.images.{self.rename_map.get(key, key)}"] = self._camera_transforms[
                 self.rename_map.get(key, key)
-            ](np.array(img_data, copy=True))
+            ](img_np)
 
         observation = self.preprocessor(observation)
 
+        if self._should_debug_log():
+            self._debug_log(
+                "lerobot debug preprocessed "
+                f"keys={sorted(observation.keys())} "
+                f"state_tensor_shape={tuple(observation['observation.state'].shape)} "
+                f"state_tensor_min={float(observation['observation.state'].min().item()):.5f} "
+                f"state_tensor_max={float(observation['observation.state'].max().item()):.5f}"
+            )
+            for key in sorted(k for k in observation.keys() if k.startswith("observation.images.")):
+                tensor = observation[key]
+                self._debug_log(
+                    "lerobot debug tensor "
+                    f"{key} shape={tuple(tensor.shape)} "
+                    f"min={float(tensor.min().item()):.5f} "
+                    f"max={float(tensor.max().item()):.5f} "
+                    f"mean={float(tensor.mean().item()):.5f}"
+                )
+
         with torch.inference_mode():
-            action = self.policy.select_action(observation)
-            # action = self.policy.predict_action_chunk(observation)
+            # action = self.policy.select_action(observation)
+            action = self.policy.predict_action_chunk(observation)
         action = self.postprocessor(action)
 
         if isinstance(action, torch.Tensor):
             action = action.detach().float().cpu().numpy()
 
         action = np.squeeze(action, axis=0)
+        if action.ndim == 2:
+            action = action[0]
+        if self._should_debug_log():
+            self._debug_log(
+                "lerobot debug action "
+                f"shape={tuple(action.shape)} "
+                f"min={float(np.min(action)):.5f} "
+                f"max={float(np.max(action)):.5f} "
+                f"mean={float(np.mean(action)):.5f} "
+                f"first={np.array2string(np.asarray(action), precision=5)}"
+            )
         return Act(action=np.asarray(action, dtype=np.float32))
 
     def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
         info = super().reset(obs, instruction, **kwargs)
+        self._debug_counter = 0
+        self._debug_log(
+            "lerobot debug reset "
+            f"instruction={instruction!r} "
+            f"camera_keys={sorted(obs.cameras.keys())} "
+            f"state_shape={None if obs.state is None else tuple(obs.state.shape)}"
+        )
         self.policy.reset()
         return info
 
