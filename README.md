@@ -180,7 +180,7 @@ python -m vlagents start-server octo --host localhost --port 8080 --kwargs '{"ch
 python -m vlagents start-server openvla --host localhost --port 8080 --kwargs '{"checkpoint_path": "Juelg/openvla-7b-finetuned-maniskill", "device": "cuda:0", "attn_implementation": "flash_attention_2", "unnorm_key": "maniskill_human:7.0.0", "checkpoint_step": 40000}'
 
 # openpi
-python -m vlagents start-server openpi --port=8080 --host=localhost --kwargs='{"checkpoint_path": "<path to checkpoint>/{checkpoint_step}", "model_name": "pi0_rcs", "checkpoint_step": <checkpoint_step>}' # leave "{checkpoint_step}" it will be replaced, "model_name" is the key for the training config
+python -m vlagents start-server openpi --port=8080 --host=localhost --kwargs='{"checkpoint_path": "gs://openpi-assets/checkpoints/pi0_droid", "train_config_name": "pi0_droid"}' # leave "{checkpoint_step}" it will be replaced, "model_name" is the key for the training config
 
 # vjepa2-ac
 python -m vlagents start-server vjepa --port=20997 --host=0.0.0.0 --kwargs='{"cfg_path": "configs/inference/vjepa2-ac-vitg/<your_config>.yaml", "model_name": "vjepa2_ac_vit_giant", "default_checkpoint_path": "../.cache/torch/hub/checkpoints/vjepa2-ac-vitg.pt"}'

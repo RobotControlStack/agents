@@ -645,17 +645,13 @@ class OpenPiModel(Agent):
         self.policy = policy_config.create_trained_policy(self.cfg, checkpoint_dir)
 
     def act(self, obs: Obs) -> Act:
-        if self.chunk_counter < self.execution_horizon:
-            self.chunk_counter += 1
-            return Act(action=self._cached_action_chunk[self.chunk_counter])
-
-        else:
-            self.chunk_counter = 0
+        super().act(obs)
         observation = {f"observation/{k}": np.copy(v).transpose(2, 0, 1) for k, v in obs.cameras.items()}
         observation.update(
             {
                 # openpi expects 0 as gripper open and 1 as closed
-                "observation/state": np.concatenate([obs.info["joints"], [1 - obs.gripper]]),
+                "observation/joint_position": obs.state[:-1],
+                "observation/gripper_position": 1 - obs.state[-1],
                 "prompt": self.instruction,
             }
         )
@@ -665,7 +661,7 @@ class OpenPiModel(Agent):
         action_chunk[:, -1] = 1 - action_chunk[:, -1]
         self._cached_action_chunk = action_chunk
 
-        return Act(action=action_chunk[0])
+        return Act(action=action_chunk)
 
     def reset(self, obs: Obs, instruction: Any):
         super().reset(obs, instruction)
@@ -1005,6 +1001,7 @@ AGENTS = dict(
     test=TestAgent,
     octo=OctoModel,
     lerobot=LeRobotPolicy,
+    maniflow=ManiFlowPolicy,
     openvla=OpenVLAModel,
     octodist=OctoActionDistribution,
     openvladist=OpenVLADistribution,
