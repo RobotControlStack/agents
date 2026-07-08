@@ -374,24 +374,15 @@ class ManiFlowPolicy(Agent):
 
     def act(self, obs: Obs) -> Act:
         super().act(obs)
-        if self._cached_actions:
-            return Act(action=self._cached_actions.popleft().astype(np.float32), done=False, info={})
 
         result = self.adapter.infer(self._build_obs_dict(obs))
         actions = np.asarray(result["actions"], dtype=np.float32)
-        # The adapter transposes (B, T, D) -> (T, B, D) for batched envs; a
-        # single-obs vlagents call has B == 1, so drop the batch axis.
         if actions.ndim == 3:
-            actions = actions[:, 0, :]
+             actions = actions[:, 0, :-1]
 
-        horizon = max(1, min(self.execution_horizon, len(actions)))
-        for action in actions[1:horizon]:
-            self._cached_actions.append(np.asarray(action, dtype=np.float32))
-        return Act(
-            action=np.asarray(actions[0], dtype=np.float32),
-            done=False,
-            info={"action_chunk": actions},
-        )
+        return Act(action=actions, done=False, info={})
+
+
 
     def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
         info = super().reset(obs, instruction, **kwargs)
