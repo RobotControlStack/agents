@@ -287,41 +287,46 @@ class ManiFlowPolicy(Agent):
         default_checkpoint_path: str = "",
         device: str = "cuda:0",
         stats_path: str = "",
-        config: str | None = None,
-        train_config: str | None = None,
+        train_config_path: str | None = None,
         action_mode: str | None = None,
         use_ema: bool = False,
-        num_inference_steps: int | None = None,
-        execution_horizon: int = 1,
+        num_inference_steps: int | None = None,   # flow ode steps
+        execution_horizon: int = 1,               # chunk length; needed for low level adapter, should not cut anything becuase we handle this in serving
         rename_map: dict[str, str] | None = None,
         state_key: str = "agent_pos",
         include_instruction: bool | None = None,
         **kwargs,
     ) -> None:
+        """For now we assume wrapped maniflow will take 19d state:
+        [7 joint pos, 7 joint vel, 3 gripper pos, 1 gripper width, 1 PD], but we will only input the joint angles for now.
+
+        action 9d: [7 joint pos, 1 gripper in [-1, 1.], 1 PD mode]
+        """
         super().__init__(default_checkpoint_path=default_checkpoint_path, **kwargs)
         self.device = device
         self.stats_path = stats_path
-        self.config = config
-        self.train_config = train_config
+        self.config_path = train_config_path
         self.action_mode = action_mode
         self.use_ema = use_ema
         self.num_inference_steps = num_inference_steps
         self.execution_horizon = execution_horizon
-        self.rename_map = rename_map or {}
+        self.rename_map = rename_map or {}   # optional if we ever need to rename obs->policy_dict
         self.state_key = state_key
         self.include_instruction = include_instruction
         self.path = self.checkpoint_path or self.default_checkpoint_path
         if self.checkpoint_step is not None:
             self.path = self.path.format(checkpoint_step=self.checkpoint_step)
-        self._cached_actions: deque[np.ndarray] = deque()
 
-    @staticmethod
-    def _ensure_hvla_on_path() -> None:
+    def initialize(self):
+        # Adapter loader reads this env var to override the checkpoint's integration
+        # num_inference_steps. Leave checkpoint default in place when unset.
+        if self.num_inference_steps is not None:
+            os.environ["NUM_INFERENCE_STEPS"] = str(self.num_inference_steps)
+
         # hvla is normally an editable install, so prefer the plain import.
         try:
             import hvla  # noqa: F401
 
-            return
         except ImportError:
             pass
         # Fallback: add the in-repo source tree (repo_root/baselines/hvla).
@@ -329,64 +334,62 @@ class ManiFlowPolicy(Agent):
         if hvla_root.exists() and str(hvla_root) not in sys.path:
             sys.path.insert(0, str(hvla_root))
 
-    def initialize(self):
-        self._ensure_hvla_on_path()
-        # The adapter loader reads this env var to override the checkpoint's
-        # num_inference_steps (see load_safetensors_policy).
-        if self.num_inference_steps is not None:
-            os.environ["NUM_INFERENCE_STEPS"] = str(self.num_inference_steps)
-
-        from blocksuite.serving.serve_maniflow_policy import Args, load_safetensors_policy
+        from blocksuite.serving.serve_maniflow_policy import Args, load_safetensors_policy, ManiFlowInferAdapter
 
         args = Args(
             checkpoint=self.path,
-            config=self.config,
-            train_config=self.train_config,
+            train_config=self.config_path,
             use_ema=self.use_ema,
             stats_path=self.stats_path,
             action_mode=self.action_mode,
         )
-        self.adapter = load_safetensors_policy(args)
-        # Honour the requested device (the adapter defaults to cuda-if-available);
-        # infer() reads the device off the policy parameters.
+        self.adapter: ManiFlowInferAdapter = load_safetensors_policy(args)
         self.adapter._policy.to(self.device)
-
-        self.language_conditioned = bool(getattr(self.adapter._policy, "language_conditioned", False))
+        language_conditioned = bool(getattr(self.adapter._policy, "language_conditioned", False))
+        self.use_language = self.include_instruction is True or (self.include_instruction is None and language_conditioned)
 
     def _build_obs_dict(self, obs: Obs) -> dict[str, Any]:
-        # The adapter's infer() expects raw HWC uint8 images (it resizes to 224
-        # and converts to CHW [0,1] itself) and a 1-D state under state_key; it
-        # adds the leading (1, 1) batch/time dims for unbatched inputs.
+        """Build an obs dict for the adapter.
+
+        Args: obs dict that contains keys that policy needs
+        """
         obs_dict: dict[str, Any] = {}
         for source_key, value in obs.cameras.items():
             key = self.rename_map.get(source_key, source_key)
             obs_dict[key] = np.asarray(value)
 
-        state = obs.state
+        state = obs.state   # should be joint pos only at the moment, rest will be masked?
         if state is None:
             state = obs.info.get(self.state_key)
         if state is not None:
             obs_dict[self.state_key] = np.asarray(state, dtype=np.float32).reshape(-1)
 
-        if self.include_instruction is True or (self.include_instruction is None and self.language_conditioned):
+        if self.use_language:
             obs_dict["task_name"] = [self.instruction]
+
+        # print(state)
+        # print(obs_dict.keys())
+        print(obs_dict.keys())
+
         return obs_dict
 
     def act(self, obs: Obs) -> Act:
-        super().act(obs)
-
-        result = self.adapter.infer(self._build_obs_dict(obs))
+        """Args:
+        obs dict
+        returns chunk (T, D) where D = 8 with 7 joint angles + gripper in [0., 1.]
+        """
+        result = self.adapter.infer(self._build_obs_dict(obs))  # maniflow returns (T, B, D)
         actions = np.asarray(result["actions"], dtype=np.float32)
-        if actions.ndim == 3:
-             actions = actions[:, 0, :-1]
+        if actions.ndim == 3:    # pop off batch
+             actions = actions[:, 0]
 
-        return Act(action=actions, done=False, info={})
+        actions_without_pd = actions[..., :-1]
+        actions_without_pd[..., -1] = 0.5 + actions_without_pd[..., -1] / 2    # map gripper to [0, 1] from maniflow [-1, 1]
 
-
+        return Act(action=actions_without_pd, done=False, info={"pd": actions[..., -1]})
 
     def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
         info = super().reset(obs, instruction, **kwargs)
-        self._cached_actions.clear()
         if hasattr(self, "adapter"):
             self.adapter.reset()
         return info
