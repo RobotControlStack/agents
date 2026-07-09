@@ -359,17 +359,12 @@ class ManiFlowPolicy(Agent):
             obs_dict[key] = np.asarray(value)
 
         state = obs.state   # should be joint pos only at the moment, rest will be masked?
-        if state is None:
-            state = obs.info.get(self.state_key)
-        if state is not None:
-            obs_dict[self.state_key] = np.asarray(state, dtype=np.float32).reshape(-1)
+        state[-1] = state[-1] * 2 - 1 # transform into what maniflow expects
+
+        # TODO: what about batch dimension?
 
         if self.use_language:
             obs_dict["task_name"] = [self.instruction]
-
-        # print(state)
-        # print(obs_dict.keys())
-        print(obs_dict.keys())
 
         return obs_dict
 
@@ -378,10 +373,11 @@ class ManiFlowPolicy(Agent):
         obs dict
         returns chunk (T, D) where D = 8 with 7 joint angles + gripper in [0., 1.]
         """
+        super().act(obs)
         result = self.adapter.infer(self._build_obs_dict(obs))  # maniflow returns (T, B, D)
         actions = np.asarray(result["actions"], dtype=np.float32)
         if actions.ndim == 3:    # pop off batch
-             actions = actions[:, 0]
+             actions = actions[:, 0, :]
 
         actions_without_pd = actions[..., :-1]
         actions_without_pd[..., -1] = 0.5 + actions_without_pd[..., -1] / 2    # map gripper to [0, 1] from maniflow [-1, 1]
