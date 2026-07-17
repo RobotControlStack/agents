@@ -17,8 +17,7 @@ def dataclass_from_dict(klass, value):
     if origin is dict:
         key_type, value_type = get_args(klass)
         return {
-            dataclass_from_dict(key_type, key): dataclass_from_dict(value_type, item)
-            for key, item in value.items()
+            dataclass_from_dict(key_type, key): dataclass_from_dict(value_type, item) for key, item in value.items()
         }
     if origin is list:
         (item_type,) = get_args(klass)
@@ -105,7 +104,9 @@ class RemoteAgent(Agent):
                             self._shm[shm_key].close()
                             self._shm[shm_key].unlink()
                         self._shm[shm_key] = shared_memory.SharedMemory(create=True, size=camera_data.nbytes)
-                    camera_shared = np.ndarray(camera_data.shape, buffer=self._shm[shm_key].buf, dtype=camera_data.dtype)
+                    camera_shared = np.ndarray(
+                        camera_data.shape, buffer=self._shm[shm_key].buf, dtype=camera_data.dtype
+                    )
                     camera_shared[:] = camera_data[:]
                     camera_dict[camera_name] = SharedMemoryPayload(
                         shm_name=self._shm[shm_key].name,

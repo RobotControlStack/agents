@@ -15,12 +15,10 @@ def _make_obs(data: np.ndarray, instruction: str = "do something") -> Obs:
     )
 
 
-
 def _single_robot_action_info(act):
     step = act.acts[0]
     robot_action = step["right"]
     return robot_action.action, robot_action.gripper, robot_action.done, robot_action.info
-
 
 
 def _test_connection(agent: RemoteAgent):

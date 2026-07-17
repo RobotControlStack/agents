@@ -501,7 +501,11 @@ def multi_eval(
 
 @contextmanager
 def start_server(
-    agent_name: str, kwargs: dict[str, Any], port: int = 8080, host: str = "localhost", python_path: str = sys.executable
+    agent_name: str,
+    kwargs: dict[str, Any],
+    port: int = 8080,
+    host: str = "localhost",
+    python_path: str = sys.executable,
 ):
     """Start the agent server in a subprocess as a context manager.
 

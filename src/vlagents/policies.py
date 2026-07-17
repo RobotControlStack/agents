@@ -41,6 +41,7 @@ class SingleObs:
     tquat: np.ndarray | None = None
     info: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass(kw_only=True)
 class Obs:
     # dictionary for multiple robot arms
@@ -114,9 +115,7 @@ class Agent:
 
     def _require_single_arm(self, obs: Obs) -> tuple[str, SingleObs]:
         if len(obs.obs) != 1:
-            raise ValueError(
-                f"{type(self).__name__} currently supports exactly one arm, got {list(obs.obs.keys())}"
-            )
+            raise ValueError(f"{type(self).__name__} currently supports exactly one arm, got {list(obs.obs.keys())}")
         robot_name, single_obs = next(iter(obs.obs.items()))
         return robot_name, single_obs
 
@@ -276,8 +275,9 @@ class LeRobotPolicy(Agent):
         from collections import deque
 
         import torch
-        from lerobot.policies.factory import get_policy_class, make_pre_post_processors
         from torchvision.transforms import v2
+
+        from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
         # from vlagents import train_xvla
 
@@ -337,7 +337,9 @@ class LeRobotPolicy(Agent):
         robot_name, single_obs = self._require_single_arm(obs)
 
         observation = {
-            "observation.state": torch.as_tensor(np.array(self._single_obs_state(single_obs), copy=True)).to(torch.float32),
+            "observation.state": torch.as_tensor(np.array(self._single_obs_state(single_obs), copy=True)).to(
+                torch.float32
+            ),
             "task": obs.language_instruction,
         }
 
@@ -492,8 +494,10 @@ class VjepaAC(Agent):
             xyzrpy = np.asarray(single_obs.xyzrpy, dtype=np.float32)
             gripper = float(single_obs.gripper if single_obs.gripper is not None else 0.0)
             # [xyzrpy(6), gripper(1)] -> [B=1, state_dim]
-            s_n = torch.tensor(np.concatenate((xyzrpy, [1 - gripper]), axis=0)).unsqueeze(0).to(
-                self.device, dtype=torch.float, non_blocking=True
+            s_n = (
+                torch.tensor(np.concatenate((xyzrpy, [1 - gripper]), axis=0))
+                .unsqueeze(0)
+                .to(self.device, dtype=torch.float, non_blocking=True)
             )
 
             # predicted action chunk: [rollout_horizon, action_dim]
@@ -537,7 +541,8 @@ class OpenPiModel(Agent):
         robot_name, single_obs = self._require_single_arm(obs)
         observation = {
             # OpenPI expects channel-first images: [H, W, C] -> [C, H, W]
-            f"observation/{k}": np.copy(v).transpose(2, 0, 1) for k, v in single_obs.cameras.items()
+            f"observation/{k}": np.copy(v).transpose(2, 0, 1)
+            for k, v in single_obs.cameras.items()
         }
         observation.update(
             {
@@ -794,8 +799,9 @@ class OctoActionDistribution(OctoModel):
 class OpenVLADistribution(OpenVLAModel):
 
     def act(self, obs: Obs) -> Act:
-        import torch
         import time
+
+        import torch
 
         Agent.act(self, obs)
         robot_name, single_obs = self._require_single_arm(obs)
