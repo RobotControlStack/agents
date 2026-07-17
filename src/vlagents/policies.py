@@ -30,21 +30,38 @@ class CameraDataType:
 
 
 @dataclass(kw_only=True)
-class Obs:
+class SingleObs:
     cameras: dict[str, np.ndarray | SharedMemoryPayload | str] = field(default_factory=dict)
     camera_data_type: str = CameraDataType.RAW
     gripper: float | None = None
-    # TODO: add context about what the state means, and its dimensions
-    # theoratically it would be joints, xyzrpy and absolute or relative
-    state: np.ndarray | None = None
+    joints: np.ndarray | None = None
+    # translation in m and rotation around x, y, z axes in radians
+    xyzrpy: np.ndarray | None = None
+    # translation in m and quaternion in (x, y, z, w) format
+    tquat: np.ndarray | None = None
+    info: dict[str, Any] = field(default_factory=dict)
+
+@dataclass(kw_only=True)
+class Obs:
+    # dictionary for multiple robot arms
+    obs: dict[str, Any] = field(default_factory=dict)
+    language_instruction: str | None = None
+    goal_image: np.ndarray | SharedMemoryPayload | str | None = None
+    goal_image_data_type: str = CameraDataType.RAW
+
+
+@dataclass(kw_only=True)
+class SingleAct:
+    action: np.ndarray
+    gripper: float | None = None
+    done: bool = False
     info: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(kw_only=True)
 class Act:
-    action: np.ndarray
-    done: bool = False
-    info: dict[str, Any] = field(default_factory=dict)
+    # action chunk with dictionary for multiple robot arms
+    acts: list[dict[str, SingleAct]] = field(default_factory=list)
 
 
 class Agent:
