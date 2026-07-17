@@ -2,7 +2,7 @@ import base64
 import dataclasses
 from dataclasses import asdict
 from multiprocessing import shared_memory
-from typing import Any
+from typing import Any, get_args, get_origin
 
 import json_numpy
 import numpy as np
@@ -12,13 +12,23 @@ import simplejpeg
 from vlagents.policies import Act, Agent, CameraDataType, Obs, SharedMemoryPayload
 
 
-def dataclass_from_dict(klass, d):
-    # https://stackoverflow.com/questions/53376099/python-dataclass-from-a-nested-dict
-    try:
+def dataclass_from_dict(klass, value):
+    origin = get_origin(klass)
+    if origin is dict:
+        key_type, value_type = get_args(klass)
+        return {
+            dataclass_from_dict(key_type, key): dataclass_from_dict(value_type, item)
+            for key, item in value.items()
+        }
+    if origin is list:
+        (item_type,) = get_args(klass)
+        return [dataclass_from_dict(item_type, item) for item in value]
+
+    if dataclasses.is_dataclass(klass):
         fieldtypes = {f.name: f.type for f in dataclasses.fields(klass)}
-        return klass(**{f: dataclass_from_dict(fieldtypes[f], d[f]) for f in d})
-    except:
-        return d  # Not a dataclass field
+        return klass(**{field: dataclass_from_dict(fieldtypes[field], value[field]) for field in value})
+
+    return value
 
 
 class RemoteAgent(Agent):
@@ -84,32 +94,35 @@ class RemoteAgent(Agent):
             self.reconnect()
 
     def _process(self, obs: Obs) -> Obs:
-        if self.on_same_machine:
-            camera_dict = {}
-            for camera_name, camera_data in obs.cameras.items():
-                assert isinstance(camera_data, np.ndarray)
-                if camera_name not in self._shm:
-                    self._shm[camera_name] = shared_memory.SharedMemory(create=True, size=camera_data.nbytes)
-                camera_shared = np.ndarray(
-                    camera_data.shape, buffer=self._shm[camera_name].buf, dtype=camera_data.dtype
-                )
-                camera_shared[:] = camera_data[:]
-                camera_dict[camera_name] = SharedMemoryPayload(
-                    shm_name=self._shm[camera_name].name,
-                    shape=camera_data.shape,
-                    dtype=camera_data.dtype.name,
-                )
-            obs.cameras = camera_dict
-            obs.camera_data_type = CameraDataType.SHARED_MEMORY
-        elif self.jpeg_encoding:
-            camera_dict = {}
-            for camera_name, camera_data in obs.cameras.items():
-                assert isinstance(camera_data, np.ndarray)
-                camera_dict[camera_name] = base64.urlsafe_b64encode(
-                    simplejpeg.encode_jpeg(np.ascontiguousarray(camera_data))
-                ).decode("utf-8")
-            obs.cameras = camera_dict
-            obs.camera_data_type = CameraDataType.JPEG_ENCODED
+        for robot_name, single_obs in obs.obs.items():
+            if self.on_same_machine:
+                camera_dict = {}
+                for camera_name, camera_data in single_obs.cameras.items():
+                    assert isinstance(camera_data, np.ndarray)
+                    shm_key = f"{robot_name}:{camera_name}"
+                    if shm_key not in self._shm or self._shm[shm_key].size < camera_data.nbytes:
+                        if shm_key in self._shm:
+                            self._shm[shm_key].close()
+                            self._shm[shm_key].unlink()
+                        self._shm[shm_key] = shared_memory.SharedMemory(create=True, size=camera_data.nbytes)
+                    camera_shared = np.ndarray(camera_data.shape, buffer=self._shm[shm_key].buf, dtype=camera_data.dtype)
+                    camera_shared[:] = camera_data[:]
+                    camera_dict[camera_name] = SharedMemoryPayload(
+                        shm_name=self._shm[shm_key].name,
+                        shape=camera_data.shape,
+                        dtype=camera_data.dtype.name,
+                    )
+                single_obs.cameras = camera_dict
+                single_obs.camera_data_type = CameraDataType.SHARED_MEMORY
+            elif self.jpeg_encoding:
+                camera_dict = {}
+                for camera_name, camera_data in single_obs.cameras.items():
+                    assert isinstance(camera_data, np.ndarray)
+                    camera_dict[camera_name] = base64.urlsafe_b64encode(
+                        simplejpeg.encode_jpeg(np.ascontiguousarray(camera_data))
+                    ).decode("utf-8")
+                single_obs.cameras = camera_dict
+                single_obs.camera_data_type = CameraDataType.JPEG_ENCODED
         return obs
 
     def act(self, obs: Obs) -> Act:
@@ -123,18 +136,6 @@ class RemoteAgent(Agent):
             self.reconnect()
             assert self.c is not None
             return dataclass_from_dict(Act, json_numpy.loads(self.c.root.act(obs)))
-
-    def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
-        obs = self._process(obs)
-        obs_dict = asdict(obs)
-        # info
-        try:
-            assert self.c is not None
-            return json_numpy.loads(self.c.root.reset(json_numpy.dumps((obs_dict, instruction, kwargs))))
-        except Exception:
-            self.reconnect()
-            assert self.c is not None
-            return json_numpy.loads(self.c.root.reset(json_numpy.dumps((obs_dict, instruction, kwargs))))
 
     def git_status(self) -> str:
         assert self.c is not None
@@ -155,9 +156,12 @@ class RemoteAgent(Agent):
 
 if __name__ == "__main__":
     # to test the connection
+    from vlagents.policies import SingleObs
+
     agent = RemoteAgent("localhost", 8080, "test")
-    obs = Obs(cameras={"rgb_side": np.zeros((256, 256, 3), dtype=np.uint8)})
-    instruction = "do something"
-    agent.reset(obs, instruction)
+    obs = Obs(
+        obs={"right": SingleObs(cameras={"rgb_side": np.zeros((256, 256, 3), dtype=np.uint8)})},
+        language_instruction="do something",
+    )
     print(agent.act(obs))
     print(agent.act(obs))

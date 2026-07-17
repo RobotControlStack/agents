@@ -5,6 +5,7 @@ import logging
 import os
 import shlex
 import subprocess
+import sys
 from abc import ABC
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -500,7 +501,7 @@ def multi_eval(
 
 @contextmanager
 def start_server(
-    agent_name: str, kwargs: dict[str, Any], port: int = 8080, host: str = "localhost", python_path: str = "python"
+    agent_name: str, kwargs: dict[str, Any], port: int = 8080, host: str = "localhost", python_path: str = sys.executable
 ):
     """Start the agent server in a subprocess as a context manager.
 
@@ -514,7 +515,7 @@ def start_server(
         host (str): Host to bind the server to. Defaults to "localhost".
         python_path (str): Path to the Python interpreter to use. If you use conda you can look up the path with `conda info --envs`.
             It can also be a format string that will be formatted with the agent_name, e.g. "conda run -n {agent_name} python".
-            Defaults to "python".
+            Defaults to the current interpreter (`sys.executable`).
     """
     cmd = [
         python_path.format(agent_name=agent_name),
@@ -527,7 +528,11 @@ def start_server(
         f"--kwargs={json.dumps(kwargs)}",
     ]
     logging.info("Server starting: %s", " ".join(cmd))
-    p = subprocess.Popen(cmd)
+    env = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1])
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = source_root if not existing_pythonpath else f"{source_root}:{existing_pythonpath}"
+    p = subprocess.Popen(cmd, env=env)
     try:
         yield p
     finally:

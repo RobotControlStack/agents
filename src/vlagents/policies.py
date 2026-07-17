@@ -44,7 +44,7 @@ class SingleObs:
 @dataclass(kw_only=True)
 class Obs:
     # dictionary for multiple robot arms
-    obs: dict[str, Any] = field(default_factory=dict)
+    obs: dict[str, SingleObs] = field(default_factory=dict)
     language_instruction: str | None = None
     goal_image: np.ndarray | SharedMemoryPayload | str | None = None
     goal_image_data_type: str = CameraDataType.RAW
@@ -68,54 +68,131 @@ class Agent:
     def __init__(
         self, default_checkpoint_path: str, checkpoint_path: str | None = None, checkpoint_step: int | None = None
     ) -> None:
-        self.instruction = None
-        self.step = -1
-        self.episode = -1
         self.checkpoint_step = checkpoint_step
         self.default_checkpoint_path = default_checkpoint_path
         self.checkpoint_path = checkpoint_path
+        self.instruction: str | None = None
+        self.step = -1
         self._shm: dict[str, shared_memory.SharedMemory] = {}
 
     def initialize(self):
         # heavy initialization, e.g. loading models
         pass
 
+    def _decode_image_payload(
+        self,
+        payload: np.ndarray | SharedMemoryPayload | str,
+        data_type: str,
+    ) -> np.ndarray:
+        if data_type == CameraDataType.RAW:
+            assert isinstance(payload, np.ndarray)
+            return payload
+        if data_type == CameraDataType.SHARED_MEMORY:
+            assert isinstance(payload, SharedMemoryPayload)
+            if payload.shm_name not in self._shm:
+                self._shm[payload.shm_name] = shared_memory.SharedMemory(payload.shm_name)
+            shm = self._shm[payload.shm_name]
+            return np.ndarray(payload.shape, dtype=payload.dtype, buffer=shm.buf)
+        if data_type == CameraDataType.JPEG_ENCODED:
+            assert isinstance(payload, str)
+            return simplejpeg.decode_jpeg(base64.urlsafe_b64decode(payload))
+        raise ValueError(f"Unsupported camera data type: {data_type}")
+
     def _to_numpy(self, obs: Obs) -> Obs:
-        """transparently uses shared memory if configured and modifies obs in place"""
-        if obs.camera_data_type == CameraDataType.SHARED_MEMORY:
-            camera_dict = {}
-            for camera_name, camera_data in obs.cameras.items():
-                assert isinstance(camera_data, SharedMemoryPayload)
-                if camera_data.shm_name not in self._shm:
-                    self._shm[camera_data.shm_name] = shared_memory.SharedMemory(camera_data.shm_name)
-                camera_dict[camera_name] = np.ndarray(
-                    camera_data.shape, dtype=camera_data.dtype, buffer=self._shm[camera_data.shm_name].buf
-                )
-            obs.cameras = camera_dict
-        elif obs.camera_data_type == CameraDataType.JPEG_ENCODED:
-            camera_dict = {}
-            for camera_name, camera_data in obs.cameras.items():
-                assert isinstance(camera_data, str)
-                camera_dict[camera_name] = simplejpeg.decode_jpeg(base64.urlsafe_b64decode(camera_data))
-            obs.cameras = camera_dict
-        obs.camera_data_type = CameraDataType.RAW
+        """Decode camera payloads in-place for every robot and goal image."""
+        for single_obs in obs.obs.values():
+            single_obs.cameras = {
+                camera_name: self._decode_image_payload(camera_data, single_obs.camera_data_type)
+                for camera_name, camera_data in single_obs.cameras.items()
+            }
+            single_obs.camera_data_type = CameraDataType.RAW
+
+        if obs.goal_image is not None:
+            obs.goal_image = self._decode_image_payload(obs.goal_image, obs.goal_image_data_type)
+            obs.goal_image_data_type = CameraDataType.RAW
         return obs
 
+    def _require_single_arm(self, obs: Obs) -> tuple[str, SingleObs]:
+        if len(obs.obs) != 1:
+            raise ValueError(
+                f"{type(self).__name__} currently supports exactly one arm, got {list(obs.obs.keys())}"
+            )
+        robot_name, single_obs = next(iter(obs.obs.items()))
+        return robot_name, single_obs
+
+    def _single_obs_state(self, single_obs: SingleObs, *, include_gripper: bool = True) -> np.ndarray:
+        state_parts: list[np.ndarray] = []
+        if single_obs.joints is not None:
+            state_parts.append(np.asarray(single_obs.joints, dtype=np.float32))
+        if include_gripper and single_obs.gripper is not None:
+            state_parts.append(np.asarray([single_obs.gripper], dtype=np.float32))
+        if not state_parts:
+            raise ValueError(f"{type(self).__name__} requires joints and/or gripper in the observation")
+        return np.concatenate(state_parts)
+
+    def _single_step_act(
+        self,
+        robot_name: str,
+        action: np.ndarray,
+        *,
+        gripper: float | None = None,
+        done: bool = False,
+        info: dict[str, Any] | None = None,
+    ) -> Act:
+        return Act(
+            acts=[
+                {
+                    robot_name: SingleAct(
+                        action=np.asarray(action, dtype=np.float32),
+                        gripper=None if gripper is None else float(gripper),
+                        done=done,
+                        info={} if info is None else info,
+                    )
+                }
+            ]
+        )
+
+    def _chunk_act(
+        self,
+        robot_name: str,
+        action_chunk: np.ndarray,
+        *,
+        grippers: np.ndarray | list[float] | None = None,
+        infos: list[dict[str, Any] | None] | None = None,
+        done: bool = False,
+    ) -> Act:
+        actions = np.asarray(action_chunk, dtype=np.float32)
+        if actions.ndim == 1:
+            actions = actions[None, :]
+        if grippers is None:
+            gripper_values = [None] * len(actions)
+        else:
+            gripper_array = np.asarray(grippers, dtype=np.float32).reshape(-1)
+            if len(gripper_array) != len(actions):
+                raise ValueError("grippers must have the same length as the action chunk")
+            gripper_values = [float(value) for value in gripper_array]
+        info_values = infos or [None] * len(actions)
+        if len(info_values) != len(actions):
+            raise ValueError("infos must have the same length as the action chunk")
+        return Act(
+            acts=[
+                {
+                    robot_name: SingleAct(
+                        action=actions[idx],
+                        gripper=gripper_values[idx],
+                        done=done and idx == len(actions) - 1,
+                        info={} if info_values[idx] is None else info_values[idx],
+                    )
+                }
+                for idx in range(len(actions))
+            ]
+        )
+
     def act(self, obs: Obs) -> Act:
-        assert self.instruction is not None, "forgot reset?"
+        self.instruction = obs.language_instruction
         self.step += 1
         self._to_numpy(obs)
-
-        return Act(action=np.zeros(7, dtype=np.float32), done=False, info={})
-
-    def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
-        logging.info(f"Resetting agent, new instruction: {instruction} ###############")
-        self.step = 0
-        self.episode += 1
-        self.instruction = instruction
-        self._to_numpy(obs)
-        # info
-        return {}
+        return Act(acts=[])
 
     def __enter__(self):
         pass
@@ -138,25 +215,27 @@ class TestAgent(Agent):
 
     def act(self, obs: Obs) -> Act:
         super().act(obs)
-        # echo data back for testing
+        assert len(obs.obs) == 1, "TestAgent currently expects a single robot observation"
+        robot_name, robot_obs = next(iter(obs.obs.items()))
         info = {
-            "shapes": {k: v.shape for k, v in obs.cameras.items()},
-            "dtype": {k: v.dtype.name for k, v in obs.cameras.items()},
-            "data": {k: v for k, v in obs.cameras.items()},
+            "shapes": {k: v.shape for k, v in robot_obs.cameras.items()},
+            "dtype": {k: v.dtype.name for k, v in robot_obs.cameras.items()},
+            "data": {k: v for k, v in robot_obs.cameras.items()},
         }
-        a = Act(action=np.array([0, 0, 0, 0, 0, 0, self.i % 2], dtype=np.float32), done=False, info=info)
+        a = Act(
+            acts=[
+                {
+                    robot_name: SingleAct(
+                        action=np.array([0, 0, 0, 0, 0, 0], dtype=np.float32),
+                        gripper=float(self.i % 2),
+                        done=False,
+                        info=info,
+                    )
+                }
+            ]
+        )
         self.i += 1
         return a
-
-    def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
-        super().reset(obs, instruction, **kwargs)
-        info = {
-            "shapes": {k: v.shape for k, v in obs.cameras.items()},
-            "dtype": {k: v.dtype.name for k, v in obs.cameras.items()},
-            "data": {k: v for k, v in obs.cameras.items()},
-            "instruction": instruction,
-        }
-        return info
 
 
 class LeRobotPolicy(Agent):
@@ -255,36 +334,32 @@ class LeRobotPolicy(Agent):
         import torch
 
         super().act(obs)
+        robot_name, single_obs = self._require_single_arm(obs)
 
         observation = {
-            "observation.state": torch.as_tensor(np.array(obs.state, copy=True)).to(torch.float32),
-            "task": self.instruction,
+            "observation.state": torch.as_tensor(np.array(self._single_obs_state(single_obs), copy=True)).to(torch.float32),
+            "task": obs.language_instruction,
         }
 
-        for key, img_data in obs.cameras.items():
-            expected_shape = self._expected_image_shapes.get(self.rename_map.get(key, key))
+        for key, img_data in single_obs.cameras.items():
+            renamed_key = self.rename_map.get(key, key)
+            expected_shape = self._expected_image_shapes.get(renamed_key)
             assert expected_shape is not None
-            observation[f"observation.images.{self.rename_map.get(key, key)}"] = self._camera_transforms[
-                self.rename_map.get(key, key)
-            ](np.array(img_data, copy=True))
+            observation[f"observation.images.{renamed_key}"] = self._camera_transforms[renamed_key](
+                np.array(img_data, copy=True)
+            )
 
         observation = self.preprocessor(observation)
 
         with torch.inference_mode():
             action = self.policy.select_action(observation)
-            # action = self.policy.predict_action_chunk(observation)
         action = self.postprocessor(action)
 
         if isinstance(action, torch.Tensor):
             action = action.detach().float().cpu().numpy()
 
         action = np.squeeze(action, axis=0)
-        return Act(action=np.asarray(action, dtype=np.float32))
-
-    def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
-        info = super().reset(obs, instruction, **kwargs)
-        self.policy.reset()
-        return info
+        return self._single_step_act(robot_name, np.asarray(action[:-1], dtype=np.float32), gripper=float(action[-1]))
 
 
 class VjepaAC(Agent):
@@ -384,64 +459,50 @@ class VjepaAC(Agent):
             device=self.device,
         )
 
-    def act(self, obs: Obs) -> Act:
-        # torch imports
-        import torch
-        from torchvision.io import decode_jpeg
-
-        super().act(obs)
-
-        with torch.no_grad():
-
-            # read from camera-stream
-            side = obs.cameras["rgb_side"]
-
-            # [3, 720, 1280]  -> [1, 720, 1280, 3] i.e, [T, C, Patches, dim]
-            side = torch.permute(side, (1, 2, 0)).unsqueeze(0)
-
-            # [1, 720, 1280, 3] -> [1, 3, 1, 256, 1408] i.e, [B, C, T, Patches, dim]
-            input_image_tensor = (self.transform(side)[None, :]).to(
-                device=self.device, dtype=torch.float, non_blocking=True
-            )
-            # Pre-trained VJEPA 2 ENCODER: [1, 3, 1, 256, 1408] -> [1, 256, 1408]
-            z_n = self.world_model.encode(input_image_tensor)
-
-            # [1, 7] -> [B, state_dim]
-            # TODO: check gripper state convention
-            # in DROID: 0: is close to 0.86: is open?
-            # In rcs 0: is close and 1: is open
-            s_n = (
-                torch.tensor((np.concatenate(([obs.info["xyzrpy"], [1 - obs.gripper]]), axis=0)))  # [1-obs.gripper]
-                .unsqueeze(0)
-                .to(self.device, dtype=torch.float, non_blocking=True)
-            )
-
-            # Action conditioned predictor and zero-shot action inference with CEM
-            actions = self.world_model.infer_next_action(z_n, s_n, self.goal_rep)  # [rollout_horizon, 7]
-
-            first_action = actions[0].cpu()
-            first_action[-1] = 1 - first_action[-1]
-
-        return Act(action=np.array(first_action))
-
-    def reset(self, obs: Obs, instruction: Any, **kwargs) -> dict[str, Any]:
-        super().reset(obs, instruction, **kwargs)
-        # imports
-        import torch
-
         img = Image.open(self.goal_img)
-
-        # time dim exp
+        # [H, W, C] -> [T=1, H, W, C]
         goal_image = np.expand_dims(np.array(img), axis=0)
-        # batch dim exp
+        # [T=1, H, W, C] -> [B=1, C, T, crop, patches]
         goal_image_tensor = torch.tensor(self.transform(goal_image)[None, :]).to(
             device=self.device, dtype=torch.float, non_blocking=True
         )
-
         with torch.no_grad():
             self.goal_rep = self.world_model.encode(goal_image_tensor)
 
-        return {}
+    def act(self, obs: Obs) -> Act:
+        # torch imports
+        import torch
+
+        super().act(obs)
+        robot_name, single_obs = self._require_single_arm(obs)
+
+        with torch.no_grad():
+            side = single_obs.cameras["rgb_side"]
+            # [H, W, C] -> [T=1, H, W, C]
+            side = torch.permute(torch.as_tensor(side), (1, 2, 0)).unsqueeze(0)
+            # [T=1, H, W, C] -> [B=1, C, T, crop, patches]
+            input_image_tensor = (self.transform(side)[None, :]).to(
+                device=self.device, dtype=torch.float, non_blocking=True
+            )
+            # encoder output shape: [B=1, num_tokens, dim]
+            z_n = self.world_model.encode(input_image_tensor)
+
+            if single_obs.xyzrpy is None:
+                raise ValueError("VjepaAC requires xyzrpy in SingleObs.xyzrpy")
+            xyzrpy = np.asarray(single_obs.xyzrpy, dtype=np.float32)
+            gripper = float(single_obs.gripper if single_obs.gripper is not None else 0.0)
+            # [xyzrpy(6), gripper(1)] -> [B=1, state_dim]
+            s_n = torch.tensor(np.concatenate((xyzrpy, [1 - gripper]), axis=0)).unsqueeze(0).to(
+                self.device, dtype=torch.float, non_blocking=True
+            )
+
+            # predicted action chunk: [rollout_horizon, action_dim]
+            actions = self.world_model.infer_next_action(z_n, s_n, self.goal_rep)
+            first_action = np.asarray(actions[0].cpu(), dtype=np.float32)
+            # VJEPA uses the opposite gripper convention from vlagents.
+            first_action[-1] = 1 - first_action[-1]
+
+        return self._single_step_act(robot_name, first_action[:-1], gripper=float(first_action[-1]))
 
 
 class OpenPiModel(Agent):
@@ -462,9 +523,6 @@ class OpenPiModel(Agent):
         self.cfg = config.get_config(train_config_name)
         self.execution_horizon = execution_horizon
 
-        self.chunk_counter = self.execution_horizon
-        self._cached_action_chunk = None
-
     def initialize(self):
         from openpi.policies import policy_config
         from openpi.shared import download
@@ -475,33 +533,24 @@ class OpenPiModel(Agent):
         self.policy = policy_config.create_trained_policy(self.cfg, checkpoint_dir)
 
     def act(self, obs: Obs) -> Act:
-        if self.chunk_counter < self.execution_horizon:
-            self.chunk_counter += 1
-            return Act(action=self._cached_action_chunk[self.chunk_counter])
-
-        else:
-            self.chunk_counter = 0
-        observation = {f"observation/{k}": np.copy(v).transpose(2, 0, 1) for k, v in obs.cameras.items()}
+        super().act(obs)
+        robot_name, single_obs = self._require_single_arm(obs)
+        observation = {
+            # OpenPI expects channel-first images: [H, W, C] -> [C, H, W]
+            f"observation/{k}": np.copy(v).transpose(2, 0, 1) for k, v in single_obs.cameras.items()
+        }
         observation.update(
             {
                 # openpi expects 0 as gripper open and 1 as closed
-                "observation/state": np.concatenate([obs.info["joints"], [1 - obs.gripper]]),
-                "prompt": self.instruction,
+                "observation/state": np.concatenate(
+                    [np.asarray(single_obs.joints, dtype=np.float32), [1 - float(single_obs.gripper or 0.0)]]
+                ),
+                "prompt": obs.language_instruction,
             }
         )
-        action_chunk = self.policy.infer(observation)["actions"]
-
-        # convert gripper action into vlagents format
+        action_chunk = np.asarray(self.policy.infer(observation)["actions"], dtype=np.float32)
         action_chunk[:, -1] = 1 - action_chunk[:, -1]
-        self._cached_action_chunk = action_chunk
-
-        return Act(action=action_chunk[0])
-
-    def reset(self, obs: Obs, instruction: Any):
-        super().reset(obs, instruction)
-        self.chunk_counter = self.execution_horizon
-        self._cached_action_chunk = None
-        return {}
+        return self._chunk_act(robot_name, action_chunk[:, :-1], grippers=action_chunk[:, -1])
 
 
 class OpenVLAModel(Agent):
@@ -573,18 +622,16 @@ class OpenVLAModel(Agent):
         import torch
 
         super().act(obs)
-        # Parse payload components
-        assert obs.cameras["rgb_side"].shape == (256, 256, 3), "wrong shape, use lanczos"
-        image = obs.cameras["rgb_side"]
+        robot_name, single_obs = self._require_single_arm(obs)
+        assert single_obs.cameras["rgb_side"].shape == (256, 256, 3), "wrong shape, use lanczos"
+        image = single_obs.cameras["rgb_side"]
         unnorm_key = self.unnorm_key
 
-        # Run VLA Inference
-        prompt = self.get_openvla_prompt(self.instruction, self.openvla_path)
+        prompt = self.get_openvla_prompt(obs.language_instruction or "", self.openvla_path)
         inputs = self.processor(prompt, Image.fromarray(image).convert("RGB")).to(self.device, dtype=torch.bfloat16)
-        # to use temperature use: do_sample=True, temperature=50.0
-        action = self.vla.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
-        # unsqueeze to add horizon dimension
-        return Act(action=action[None])
+        action = np.asarray(self.vla.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False), dtype=np.float32)
+        # OpenVLA returns a single step with gripper in the last dimension.
+        return self._single_step_act(robot_name, action[:-1], gripper=float(action[-1]))
 
 
 class OctoModel(Agent):
@@ -664,10 +711,6 @@ class OctoModel(Agent):
 
         self.trained_obs = self.model.example_batch["observation"].keys()
 
-        self.horizon = self.horizon
-        self.history = deque(maxlen=self.horizon)
-        self.num_obs = 0
-
         logging.info("==========================")
         logging.info(self.model.dataset_statistics.keys())
         self.policy_fn = supply_rng(
@@ -676,45 +719,28 @@ class OctoModel(Agent):
                 unnormalization_statistics=reduce(getitem, self.unnorm_key, self.model.dataset_statistics)["action"],
             ),
         )
-        self.task = None
 
     def act(self, obs: Obs) -> Act:
-        # from octo.model.octo_model import _verify_shapes
         import jax
         from octo.utils.gym_wrappers import stack_and_pad
 
         super().act(obs)
-        assert self.task is not None, "forgot reset?"
-        # _verify_shapes(obs, <name>, self.model.example_batch["observation"])
-
-        self.num_obs += 1
-
-        # single image
-        assert obs.cameras["rgb_side"].shape == (256, 256, 3), "wrong shape, use lanczos"
-        obs = {"image_primary": obs.cameras["rgb_side"]}
-
-        self.history.append(obs)
-        assert len(self.history) == self.horizon, "forgot reset?"
-        full_obs = stack_and_pad(self.history, self.num_obs)
+        robot_name, single_obs = self._require_single_arm(obs)
+        assert single_obs.cameras["rgb_side"].shape == (256, 256, 3), "wrong shape, use lanczos"
+        image_obs = {"image_primary": single_obs.cameras["rgb_side"]}
+        history = deque([image_obs] * self.horizon, maxlen=self.horizon)
+        full_obs = stack_and_pad(history, self.horizon)
+        task = self.model.create_tasks(texts=[obs.language_instruction or ""])
 
         actions = self.policy_fn(
             jax.tree_map(
                 lambda x: x[None],
                 full_obs,
             ),
-            self.task,
+            task,
         )
-        # remove the batch dimension (batch, horizon, action)
-        return Act(action=np.array(actions[0, :, :]))
-
-    def reset(self, obs: Obs, instruction: Any):
-        super().reset(obs, instruction)
-        assert obs.cameras["rgb_side"].shape == (256, 256, 3), "wrong shape"
-        obs = {"image_primary": obs.cameras["rgb_side"]}
-        self.task = self.model.create_tasks(texts=[instruction])
-        self.num_obs = 1
-        self.history.extend([obs] * self.horizon)
-        return {}
+        action_chunk = np.asarray(actions[0, :, :], dtype=np.float32)
+        return self._chunk_act(robot_name, action_chunk[:, :-1], grippers=action_chunk[:, -1])
 
 
 class OctoActionDistribution(OctoModel):
@@ -728,107 +754,87 @@ class OctoActionDistribution(OctoModel):
         super().__init__(**kwargs)
 
     def act(self, obs: Obs) -> Act:
-        """
-        Args:
-            Obs:
-                cameras:
-                    rgb_side: np.ndarray[tuple[BATCH, H, W, Literal[3]], np.dtype[np.int8]]
-                info:
-                    num_samples: int
-        Return:
-            Act:
-                action: None
-                info:
-                    means: np.ndarray[tuple[BATCH, 7], np.dtype[np.float32]]
-                    stds: np.ndarray[tuple[BATCH, 7], np.dtype[np.float32]]
-        """
-        import jax
         import jax.numpy as jnp
 
-        self._from_shared_memory(obs)
+        Agent.act(self, obs)
+        robot_name, single_obs = self._require_single_arm(obs)
 
-        batch_size = obs.cameras["rgb_side"].shape[0]
-        assert obs.cameras["rgb_side"].shape == (batch_size, 256, 256, 3), "wrong shape"
-        assert self.instruction is not None, "forgot reset?"
-        num_samples = obs.info.get("num_samples", 1)
+        batch_size = single_obs.cameras["rgb_side"].shape[0]
+        assert single_obs.cameras["rgb_side"].shape == (batch_size, 256, 256, 3), "wrong shape"
+        num_samples = single_obs.info.get("num_samples", 1)
 
-        x = jnp.array(obs.cameras["rgb_side"])  # BATCH, H, W, 3
-        # x_expanded = x[:, None, :, :, :]
+        x = jnp.array(single_obs.cameras["rgb_side"])
         x_expanded = jnp.expand_dims(x, 1)
-        x_tiled = jnp.tile(x_expanded, (1, num_samples, 1, 1, 1))  # Shape: [BATCH, N, H, W, 3]
-        x_duplicated = x_tiled.reshape(-1, x.shape[1], x.shape[2], x.shape[3])  # Shape: [BATCH*N, H, W, 3]
+        x_tiled = jnp.tile(x_expanded, (1, num_samples, 1, 1, 1))
+        x_duplicated = x_tiled.reshape(-1, x.shape[1], x.shape[2], x.shape[3])
         full_obs = {
             "image_primary": jnp.expand_dims(x_duplicated, 1),
             "timestep_pad_mask": np.ones((batch_size * num_samples, 1)),
         }
-        # full_obs = stack_and_pad(x_duplicated, 1)
-        tasks = self.model.create_tasks(texts=[self.instruction] * batch_size * num_samples)
-        actions = self.policy_fn(
-            full_obs,
-            tasks,
+        tasks = self.model.create_tasks(texts=[obs.language_instruction or ""] * batch_size * num_samples)
+        actions = self.policy_fn(full_obs, tasks)
+        actions = np.asarray(actions[:, 0, :].reshape(batch_size, num_samples, -1), dtype=np.float32)
+        stds = np.std(actions, axis=1).astype(np.float32)
+        means = np.mean(actions, axis=1).astype(np.float32)
+
+        return Act(
+            acts=[
+                {
+                    robot_name: SingleAct(
+                        action=np.empty((0,), dtype=np.float32),
+                        gripper=None,
+                        done=False,
+                        info={"means": means, "stds": stds, "actions": actions},
+                    )
+                }
+            ]
         )
-        # actions: [num_samples x BATCH, 4, 7]
-        # remove the horizon dimension and reshape to [BATCH, num_samples, 7]
-        actions = actions[:, 0, :].reshape(batch_size, num_samples, 7)
-        stds = jnp.std(actions, axis=1)
-        means = jnp.mean(actions, axis=1)
-
-        stds = np.asarray(stds)
-        means = np.asarray(means)
-
-        return Act(action=None, info={"means": means, "stds": stds, "actions": np.asarray(actions)})
-
-    def reset(self, obs, instruction):
-        self.instruction = instruction
-        return {}
 
 
 class OpenVLADistribution(OpenVLAModel):
 
     def act(self, obs: Obs) -> Act:
-        # no batch dimension here
         import torch
-
-        self._from_shared_memory(obs)
-
-        assert self.instruction is not None, "forgot reset?"
-        self.step += 1
-        batch_size = obs.cameras["rgb_side"].shape[0]
-
-        # Parse payload components
-        images = obs.cameras["rgb_side"]
-        actions = []
-        unnorm_key = self.unnorm_key
-        num_samples = obs.info.get("num_samples", 1)
-
-        # time it
         import time
 
+        Agent.act(self, obs)
+        robot_name, single_obs = self._require_single_arm(obs)
+        batch_size = single_obs.cameras["rgb_side"].shape[0]
+
+        images = single_obs.cameras["rgb_side"]
+        actions = []
+        unnorm_key = self.unnorm_key
+        num_samples = single_obs.info.get("num_samples", 1)
+
         t1 = time.time()
-        # Run VLA Inference
-        prompt = self.get_openvla_prompt(self.instruction, self.openvla_path)
+        prompt = self.get_openvla_prompt(obs.language_instruction or "", self.openvla_path)
 
         x_expanded = np.expand_dims(images, 1)
-        x_tiled = np.tile(x_expanded, (1, num_samples, 1, 1, 1))  # Shape: [BATCH, N, H, W, 3]
-        x_duplicated = x_tiled.reshape(
-            -1, images.shape[1], images.shape[2], images.shape[3]
-        )  # Shape: [BATCH*N, H, W, 3]
+        x_tiled = np.tile(x_expanded, (1, num_samples, 1, 1, 1))
+        x_duplicated = x_tiled.reshape(-1, images.shape[1], images.shape[2], images.shape[3])
 
         for image in x_duplicated:
             inputs = self.processor(prompt, Image.fromarray(image).convert("RGB")).to(self.device, dtype=torch.bfloat16)
-            # to use temperature use: do_sample=True, temperature=50.0
-            action = self.vla.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
-            actions.append(action)
+            actions.append(self.vla.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False))
 
         t2 = time.time()
         logging.info(f"needed time for {len(actions)} was {t2-t1}s")
 
-        # unsqueeze to add horizon dimension
-        actions = np.stack(actions).astype(np.float32)
-        actions = actions.reshape(batch_size, num_samples, 7)
+        actions = np.stack(actions).astype(np.float32).reshape(batch_size, num_samples, -1)
         means = np.mean(actions, axis=1).astype(np.float32)
         stds = np.std(actions, axis=1).astype(np.float32)
-        return Act(action=None, info={"means": means, "stds": stds, "actions": actions})
+        return Act(
+            acts=[
+                {
+                    robot_name: SingleAct(
+                        action=np.empty((0,), dtype=np.float32),
+                        gripper=None,
+                        done=False,
+                        info={"means": means, "stds": stds, "actions": actions},
+                    )
+                }
+            ]
+        )
 
 
 AGENTS = dict(
