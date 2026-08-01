@@ -13,7 +13,7 @@ class TactileBenchmarkAgent(Agent):
         default_checkpoint_path: str = "lerobot/pi05_base",
         device: str = "cuda:0",
         n_action_steps: int = 30,
-        temporal_ensemble_coeff: float | None = 0.01,
+        temporal_ensemble_coeff: float | None = None,
         rename_map: dict[str, str] | None = None,
         **kwargs,
     ) -> None:
@@ -55,7 +55,7 @@ class TactileBenchmarkAgent(Agent):
 
         policy_config = PreTrainedConfig.from_pretrained(self.path)
         policy_class = get_policy_class(policy_config.type)
-        self.policy = policy_class.from_pretrained(self.path, config=policy_config)
+        self.policy = policy_class.from_pretrained(self.path, config=policy_config, strict=True)
         self.policy.config.n_action_steps = self.n_action_steps
         logging.info(
             "Loaded policy: type=%s variant=%s class=%s checkpoint=%s device=%s chunk_size=%s n_action_steps=%s "
@@ -135,10 +135,12 @@ class TactileBenchmarkAgent(Agent):
         }
 
         for key, img_data in obs.cameras.items():
-            if "digit" in key:
+            if "digit" in key and self.policy.config.act_variant == "default":
+                continue
+            if "blank" in key: 
                 continue
             expected_shape = self._expected_image_shapes.get(self.rename_map.get(key, key))
-            assert expected_shape is not None
+            assert expected_shape is not None, f"Unexpected camera key: {key}. Expected keys: {list(self._expected_image_shapes.keys())}"
             observation[f"observation.images.{self.rename_map.get(key, key)}"] = self._camera_transforms[
                 self.rename_map.get(key, key)
             ](np.array(img_data, copy=True))
