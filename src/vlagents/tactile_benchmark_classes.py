@@ -75,7 +75,7 @@ class TactileBenchmarkAgent(Agent):
                 if key.startswith("observation.images.")
             ],
         )
-
+        self.policy_input_image_keys = [key.removeprefix("observation.images.") for key in self.policy.config.input_features if key.startswith("observation.images")]
         if getattr(self.policy, "name", None) == "act":
             policy_module = importlib.import_module(self.policy.__class__.__module__)
             ACTTemporalEnsembler = getattr(policy_module, "ACTTemporalEnsembler")
@@ -135,9 +135,7 @@ class TactileBenchmarkAgent(Agent):
         }
 
         for key, img_data in obs.cameras.items():
-            if "digit" in key and self.policy.config.act_variant == "default":
-                continue
-            if "blank" in key: 
+            if key not in self.policy_input_image_keys:
                 continue
             expected_shape = self._expected_image_shapes.get(self.rename_map.get(key, key))
             assert expected_shape is not None, f"Unexpected camera key: {key}. Expected keys: {list(self._expected_image_shapes.keys())}"
