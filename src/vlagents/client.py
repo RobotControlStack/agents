@@ -2,7 +2,7 @@ import base64
 import dataclasses
 from dataclasses import asdict
 from multiprocessing import shared_memory
-from typing import Any, get_args, get_origin
+from typing import get_args, get_origin
 
 import json_numpy
 import numpy as np

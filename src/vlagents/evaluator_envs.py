@@ -9,7 +9,6 @@ import sys
 from abc import ABC
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from multiprocessing import Pool
 from pathlib import Path
 from time import sleep
 from typing import Any

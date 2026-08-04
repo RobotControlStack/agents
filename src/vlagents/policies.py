@@ -1,5 +1,4 @@
 import base64
-import copy
 import json
 import logging
 import os
@@ -275,9 +274,8 @@ class LeRobotPolicy(Agent):
         from collections import deque
 
         import torch
-        from torchvision.transforms import v2
-
         from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+        from torchvision.transforms import v2
 
         # from vlagents import train_xvla
 

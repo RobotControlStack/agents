@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-
 from lerobot.policies.xvla.action_hub import BaseActionSpace, register_action
 
 XVLA_DOMAIN_ID = 20
