@@ -92,38 +92,50 @@ class RemoteAgent(Agent):
         except Exception:
             self.reconnect()
 
+    def _to_shared_memory_payload(self, shm_key: str, image: np.ndarray) -> SharedMemoryPayload:
+        if shm_key not in self._shm or self._shm[shm_key].size < image.nbytes:
+            if shm_key in self._shm:
+                self._shm[shm_key].close()
+                self._shm[shm_key].unlink()
+            self._shm[shm_key] = shared_memory.SharedMemory(create=True, size=image.nbytes)
+        image_shared = np.ndarray(image.shape, buffer=self._shm[shm_key].buf, dtype=image.dtype)
+        image_shared[:] = image[:]
+        return SharedMemoryPayload(
+            shm_name=self._shm[shm_key].name,
+            shape=image.shape,
+            dtype=image.dtype.name,
+        )
+
+    @staticmethod
+    def _to_jpeg_payload(image: np.ndarray) -> str:
+        return base64.urlsafe_b64encode(simplejpeg.encode_jpeg(np.ascontiguousarray(image))).decode("utf-8")
+
     def _process(self, obs: Obs) -> Obs:
         for robot_name, single_obs in obs.obs.items():
             if self.on_same_machine:
                 camera_dict = {}
                 for camera_name, camera_data in single_obs.cameras.items():
                     assert isinstance(camera_data, np.ndarray)
-                    shm_key = f"{robot_name}:{camera_name}"
-                    if shm_key not in self._shm or self._shm[shm_key].size < camera_data.nbytes:
-                        if shm_key in self._shm:
-                            self._shm[shm_key].close()
-                            self._shm[shm_key].unlink()
-                        self._shm[shm_key] = shared_memory.SharedMemory(create=True, size=camera_data.nbytes)
-                    camera_shared = np.ndarray(
-                        camera_data.shape, buffer=self._shm[shm_key].buf, dtype=camera_data.dtype
-                    )
-                    camera_shared[:] = camera_data[:]
-                    camera_dict[camera_name] = SharedMemoryPayload(
-                        shm_name=self._shm[shm_key].name,
-                        shape=camera_data.shape,
-                        dtype=camera_data.dtype.name,
-                    )
+                    camera_dict[camera_name] = self._to_shared_memory_payload(f"{robot_name}:{camera_name}", camera_data)
                 single_obs.cameras = camera_dict
                 single_obs.camera_data_type = CameraDataType.SHARED_MEMORY
             elif self.jpeg_encoding:
                 camera_dict = {}
                 for camera_name, camera_data in single_obs.cameras.items():
                     assert isinstance(camera_data, np.ndarray)
-                    camera_dict[camera_name] = base64.urlsafe_b64encode(
-                        simplejpeg.encode_jpeg(np.ascontiguousarray(camera_data))
-                    ).decode("utf-8")
+                    camera_dict[camera_name] = self._to_jpeg_payload(camera_data)
                 single_obs.cameras = camera_dict
                 single_obs.camera_data_type = CameraDataType.JPEG_ENCODED
+
+        if obs.goal_image is not None:
+            assert isinstance(obs.goal_image, np.ndarray)
+            if self.on_same_machine:
+                obs.goal_image = self._to_shared_memory_payload("goal_image", obs.goal_image)
+                obs.goal_image_data_type = CameraDataType.SHARED_MEMORY
+            elif self.jpeg_encoding:
+                obs.goal_image = self._to_jpeg_payload(obs.goal_image)
+                obs.goal_image_data_type = CameraDataType.JPEG_ENCODED
+
         return obs
 
     def act(self, obs: Obs) -> Act:

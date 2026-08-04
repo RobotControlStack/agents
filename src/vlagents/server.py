@@ -57,6 +57,8 @@ class AgentService(rpyc.Service):
                     camera_name: dataclass_from_dict(SharedMemoryPayload, camera_data)
                     for camera_name, camera_data in single_obs.cameras.items()
                 }
+        if obs.goal_image_data_type == CameraDataType.SHARED_MEMORY and obs.goal_image is not None:
+            obs.goal_image = dataclass_from_dict(SharedMemoryPayload, obs.goal_image)
         return json_numpy.dumps(asdict(self.agent.act(obs)))
 
     @rpyc.exposed
