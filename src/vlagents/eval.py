@@ -70,13 +70,13 @@ def _write_camera_mp4(frames: list[np.ndarray], output_path: Path, fps: int = 30
 def single_eval(
     env: EvalEnv, agent: Agent, max_steps: int, ith_episode: int, start_seed: int
 ) -> tuple[list[float], list[float], list[float]]:
-    logging.debug(f"Starting evaluation")
+    logging.debug("Starting evaluation")
     obs, _ = env.reset(seed=start_seed + ith_episode)  # ensure different seed for each episode
     if obs.language_instruction is None:
         obs.language_instruction = env.language_instruction
     single_obs = next(iter(obs.obs.values()))
     cameras = single_obs.info.pop("high_res_cameras", single_obs.cameras)
-    logging.debug(f"Reset env")
+    logging.debug("Reset env")
     done = False
     truncated = False
     step = 0.0
