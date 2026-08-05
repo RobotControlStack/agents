@@ -5,6 +5,7 @@ from typing import Any
 
 import gymnasium as gym
 
+from vlagents import ENVS
 from vlagents.policies.interface import Act, Obs, SingleAct
 
 logging.basicConfig(
@@ -15,7 +16,6 @@ logging.basicConfig(
 
 
 class EvalEnv(ABC):
-    ENVS: dict[str, "EvalEnv"] = {}
 
     def __init__(self, env_id: str, execution_horizon: int | None = None, **env_kwargs) -> None:
         self.do_import()
@@ -56,12 +56,8 @@ class EvalEnv(ABC):
         raise NotImplementedError
 
     @staticmethod
-    def register(env_id: str, env: "EvalEnv") -> None:
-        EvalEnv.ENVS[env_id] = env
-
-    @staticmethod
     def make(env_id: str, **env_kwargs) -> "EvalEnv":
-        return EvalEnv.ENVS[env_id](env_id, **env_kwargs)
+        return ENVS[env_id](env_id, **env_kwargs)
 
     @staticmethod
     def do_import():

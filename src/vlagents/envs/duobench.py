@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from vlagents import register_env
 from vlagents.envs.interface import EvalEnv
 from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
@@ -78,14 +79,14 @@ class RCSDuoBench(EvalEnv):
         )
 
 
-EvalEnv.register("duobench/ball_maze", RCSDuoBench)
-EvalEnv.register("duobench/bin_sort", RCSDuoBench)
-EvalEnv.register("duobench/block_balance", RCSDuoBench)
-EvalEnv.register("duobench/carry_pot", RCSDuoBench)
-EvalEnv.register("duobench/join_blocks", RCSDuoBench)
-EvalEnv.register("duobench/hinge_chest", RCSDuoBench)
-EvalEnv.register("duobench/pour_marbles", RCSDuoBench)
-EvalEnv.register("duobench/spring_door", RCSDuoBench)
-EvalEnv.register("duobench/transfer_cube", RCSDuoBench)
-EvalEnv.register("duobench/transfer_gate", RCSDuoBench)
-EvalEnv.register("duobench/transfer_reorient", RCSDuoBench)
+register_env("duobench/ball_maze", RCSDuoBench)
+register_env("duobench/bin_sort", RCSDuoBench)
+register_env("duobench/block_balance", RCSDuoBench)
+register_env("duobench/carry_pot", RCSDuoBench)
+register_env("duobench/join_blocks", RCSDuoBench)
+register_env("duobench/hinge_chest", RCSDuoBench)
+register_env("duobench/pour_marbles", RCSDuoBench)
+register_env("duobench/spring_door", RCSDuoBench)
+register_env("duobench/transfer_cube", RCSDuoBench)
+register_env("duobench/transfer_gate", RCSDuoBench)
+register_env("duobench/transfer_reorient", RCSDuoBench)

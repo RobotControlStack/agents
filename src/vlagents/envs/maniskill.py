@@ -6,6 +6,7 @@ from typing import Any, ClassVar
 import gymnasium as gym
 import numpy as np
 
+from vlagents import register_env
 from vlagents.envs.interface import EvalEnv
 from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
@@ -118,14 +119,14 @@ class ManiSkill(EvalEnv):
         import mani_skill.envs
 
 
-EvalEnv.register("LiftPegUpright-v1", ManiSkill)
-EvalEnv.register("PegInsertionSide-v1", ManiSkill)
-EvalEnv.register("PickCube-v1", ManiSkill)
-EvalEnv.register("PlugCharger-v1", ManiSkill)
-EvalEnv.register("PullCube-v1", ManiSkill)
-EvalEnv.register("PullCubeTool-v1", ManiSkill)
-EvalEnv.register("PushCube-v1", ManiSkill)
-EvalEnv.register("PushT-v1", ManiSkill)
-EvalEnv.register("RollBall-v1", ManiSkill)
-EvalEnv.register("StackCube-v1", ManiSkill)
-EvalEnv.register("PokeCube-v1", ManiSkill)
+register_env("LiftPegUpright-v1", ManiSkill)
+register_env("PegInsertionSide-v1", ManiSkill)
+register_env("PickCube-v1", ManiSkill)
+register_env("PlugCharger-v1", ManiSkill)
+register_env("PullCube-v1", ManiSkill)
+register_env("PullCubeTool-v1", ManiSkill)
+register_env("PushCube-v1", ManiSkill)
+register_env("PushT-v1", ManiSkill)
+register_env("RollBall-v1", ManiSkill)
+register_env("StackCube-v1", ManiSkill)
+register_env("PokeCube-v1", ManiSkill)

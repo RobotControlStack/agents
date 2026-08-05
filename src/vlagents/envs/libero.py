@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 
+from vlagents import register_env
 from vlagents.envs.interface import EvalEnv
 from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
@@ -126,9 +127,9 @@ class Libero(EvalEnv):
         return self._language_instruction
 
 
-EvalEnv.register("libero_10", Libero)
-EvalEnv.register("libero_90", Libero)
-EvalEnv.register("libero_100", Libero)
-EvalEnv.register("libero_spatial", Libero)
-EvalEnv.register("libero_object", Libero)
-EvalEnv.register("libero_goal", Libero)
+register_env("libero_10", Libero)
+register_env("libero_90", Libero)
+register_env("libero_100", Libero)
+register_env("libero_spatial", Libero)
+register_env("libero_object", Libero)
+register_env("libero_goal", Libero)
