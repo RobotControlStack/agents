@@ -207,7 +207,7 @@ def run_eval(
     n_gpus: Annotated[int, typer.Option(help="Number of gpus to run.")] = 1,
     eval_cfgs: Annotated[
         str, typer.Option(help="Evaluation configurations.")
-    ] = '[{"env": "rcs/SimplePickUpSim-v0", "kwargs": {}}]',
+    ] = '[{"env_id": "rcs/SimplePickUpSim-v0", "env_kwargs": {}}]',
     agent_cfg: Annotated[
         str, typer.Option(help="Agent configuration.")
     ] = '{"host": "localhost", "port": 8080, "agent_name": "Test", "agent_kwargs": {}, "python_path": "python"}',

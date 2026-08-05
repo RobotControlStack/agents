@@ -15,12 +15,11 @@ from typing import Any
 
 import gymnasium as gym
 import numpy as np
-from PIL import Image
 from simple_slurm import Slurm
 from tqdm import tqdm
 
 from vlagents.client import RemoteAgent
-from vlagents.policies import Act, Agent, Obs
+from vlagents.policies import Act, Agent, Obs, SingleAct, SingleObs
 from vlagents.wrappers import HumanCameraWrapper
 
 logging.basicConfig(
@@ -33,12 +32,35 @@ logging.basicConfig(
 class EvaluatorEnv(ABC):
     ENVS: dict[str, "EvaluatorEnv"] = {}
 
-    def __init__(self, env_id: str, **env_kwargs) -> None:
+    def __init__(self, env_id: str, execution_horizon: int | None = None, **env_kwargs) -> None:
         self.do_import()
         self.env = gym.make(env_id, **env_kwargs)
         self.env_id = env_id
+        self.execution_horizon = execution_horizon
+        self.last_chunk_steps = 0
 
-    def step(self, action: Act) -> tuple[Obs, float, bool, bool, dict]:
+    def chunk_step(self, actions: Act, max_steps: int | None = None) -> tuple[Obs, float, bool, bool, dict[str, Any]]:
+        if not actions.acts:
+            raise ValueError("Agents must return at least one action")
+        rewards = []
+        self.last_chunk_steps = 0
+        for action in actions.acts:
+            if max_steps is not None and self.last_chunk_steps >= max_steps:
+                break
+            obs, reward, done, truncated, info = self.step(action)
+            rewards.append(reward)
+            self.last_chunk_steps += 1
+            if (
+                done
+                or truncated
+                or (self.execution_horizon is not None and self.last_chunk_steps >= self.execution_horizon)
+            ):
+                break
+        if not rewards:
+            raise ValueError("max_steps must allow at least one environment step")
+        return obs, sum(rewards), done, truncated, info
+
+    def step(self, action: dict[str, SingleAct]) -> tuple[Obs, float, bool, bool, dict]:
         raise NotImplementedError
 
     def reset(self, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[Obs, dict[str, Any]]:
@@ -71,37 +93,33 @@ class RCSDuoBench(EvaluatorEnv):
         super().__init__(env_id, **env_kwargs)
 
     def translate_obs(self, obs: dict[str, Any]) -> Obs:
-        cameras = {}
-        for key in obs["frames"]:
-            cameras[key] = obs["frames"][key]["rgb"]["data"]
-            cameras[key] = np.array(Image.fromarray(cameras[key]).resize((224, 224), Image.Resampling.BILINEAR))
-        state = []
-        for key in self.robot_keys:
-            state.append(obs[key]["joints"])
-            state.append(obs[key]["gripper"])
-
+        cameras = {key: obs["frames"][key]["rgb"]["data"] for key in obs["frames"]}
         return Obs(
-            cameras=cameras,
-            gripper=None,
-            state=np.concatenate(state),
-            info={"high_res_cameras": {key: obs["frames"][key]["rgb"]["data"] for key in obs["frames"]}},
+            obs={
+                robot_key: SingleObs(
+                    cameras=cameras.copy(),
+                    joints=np.asarray(obs[robot_key]["joints"], dtype=np.float32),
+                    gripper=float(obs[robot_key]["gripper"]),
+                )
+                for robot_key in self.robot_keys
+            },
+            language_instruction=self.language_instruction,
         )
 
-    def step(self, action: Act) -> tuple[Obs, float, bool, bool, dict]:
-        assert (
-            len(action.action.shape) == 1
-        ), "this function cannot deal with batches or action chunks, please return single actions"
+    def step(self, action: dict[str, SingleAct]) -> tuple[Obs, float, bool, bool, dict]:
         env_action = {}
-        for idx, robot in enumerate(self.robot_keys):
+        for robot in self.robot_keys:
+            robot_action = action[robot]
+            gripper = 0.0 if robot_action.gripper is None else robot_action.gripper
             if self.control_mode == "joints":
                 env_action[robot] = {
-                    "joints": action.action[idx * 8 : idx * 8 + 7],
-                    "gripper": action.action[idx * 8 + 7 : idx * 8 + 8],
+                    "joints": np.asarray(robot_action.action, dtype=np.float32),
+                    "gripper": np.asarray([gripper], dtype=np.float32),
                 }
             else:
                 env_action[robot] = {
-                    "xyzrpy": action.action[idx * 7 : idx * 7 + 6],
-                    "gripper": action.action[idx * 7 + 6 : idx * 7 + 7],
+                    "xyzrpy": np.asarray(robot_action.action, dtype=np.float32),
+                    "gripper": np.asarray([gripper], dtype=np.float32),
                 }
         obs, reward, success, truncated, info = self.env.step(env_action)
         r = float(reward)
@@ -193,18 +211,23 @@ class ManiSkill(EvaluatorEnv):
     def translate_obs(self, obs: dict[str, Any]) -> Obs:
         # does not include history
         return Obs(
-            cameras=dict(rgb_side=obs["sensor_data"]["base_camera"]["rgb"].squeeze(0).numpy()),
-            # gripper=float(not obs["extra"]["is_grasped"]),
+            obs={
+                "default": SingleObs(cameras={"rgb_side": obs["sensor_data"]["base_camera"]["rgb"].squeeze(0).numpy()})
+            },
+            language_instruction=self.language_instruction,
         )
 
-    def step(self, action: Act) -> tuple[Obs, float, bool, bool, dict]:
+    def step(self, action: dict[str, SingleAct]) -> tuple[Obs, float, bool, bool, dict]:
         # includes horizon
         # careful with gripper action: the model needs to be trained on [-1, 1] interval
-
-        a = copy.copy(action.action[0])
-        # a[-1] = -1.0 if a[-1] < 0.9 else 1.0
+        assert len(action) == 1, "ManiSkill expects a single robot action"
+        _, robot_action = next(iter(action.items()))
+        a = np.asarray(copy.copy(robot_action.action), dtype=np.float32)
+        if robot_action.gripper is not None:
+            a = np.concatenate([a, np.asarray([robot_action.gripper], dtype=np.float32)])
         if self.env_id == "PushT-v1":
-            a = a[:-1]
+            if robot_action.gripper is not None:
+                a = a[:-1]
         else:
             a[-1] = a[-1] * 2 - 1.0
         obs, reward, success, truncated, info = self.env.step(a)
@@ -238,7 +261,6 @@ EvaluatorEnv.register("PokeCube-v1", ManiSkill)
 
 
 class Libero(EvaluatorEnv):
-
     def __init__(self, env_id: str, reset_steps: int = 14, **env_kwargs) -> None:
         """
         For supported env_kwargs checkout ControlEnv class in libero.
@@ -287,14 +309,36 @@ class Libero(EvaluatorEnv):
         return env, task.language, task.name, task_suite, task_id, task
 
     def translate_obs(self, obs: dict[str, Any]) -> Obs:
+        joints = None
+        if "robot0_joint_pos" in obs:
+            joints = np.asarray(obs["robot0_joint_pos"], dtype=np.float32)
+        gripper = float(np.asarray(obs["robot0_gripper_qpos"]).reshape(-1)[0] / 0.04)
         return Obs(
-            cameras=dict(rgb_side=obs["agentview_image"][::-1], rgb_wrist=obs["robot0_eye_in_hand_image"][::-1]),
-            gripper=obs["robot0_gripper_qpos"] / 0.04,  # normalize
+            obs={
+                "robot0": SingleObs(
+                    cameras={
+                        "rgb_side": obs["agentview_image"][::-1],
+                        "rgb_wrist": obs["robot0_eye_in_hand_image"][::-1],
+                    },
+                    joints=joints,
+                    gripper=gripper,
+                )
+            },
+            language_instruction=self.language_instruction,
         )
 
-    def step(self, action: Act) -> tuple[Obs, float, bool, bool, dict]:
+    def step(self, action: dict[str, SingleAct]) -> tuple[Obs, float, bool, bool, dict]:
         # change gripper to libero format (-1, 1) where -1 is open
-        act = np.copy(action.action)
+        assert len(action) == 1, "Libero expects a single robot action"
+        _, robot_action = next(iter(action.items()))
+        if robot_action.gripper is None:
+            raise ValueError("Libero expects a gripper value in SingleAct.gripper")
+        act = np.concatenate(
+            [
+                np.asarray(robot_action.action, dtype=np.float32),
+                np.asarray([robot_action.gripper], dtype=np.float32),
+            ]
+        )
         act[-1] = (1 - act[-1]) * 2 - 1.0
         obs, reward, done, info = self.env.step(act)
         success = self.env.check_success()
@@ -346,10 +390,12 @@ EvaluatorEnv.register("libero_goal", Libero)
 class EvalConfig:
     env_id: str
     env_kwargs: dict[str, Any]
+    execution_horizon: int | None = None
     max_steps_per_episode: int = 100
     seed: int = 42
     same_machine: bool = False
     jpeg_encoding: bool = False
+    image_size: tuple[int, int] | None = (224, 224)
 
 
 @dataclass
@@ -408,22 +454,27 @@ def single_eval(
 ) -> tuple[list[float], list[float], list[float]]:
     logging.debug(f"Starting evaluation")
     obs, _ = env.reset(seed=start_seed + ith_episode)  # ensure different seed for each episode
-    cameras = obs.info.pop("high_res_cameras", obs.cameras)
+    if obs.language_instruction is None:
+        obs.language_instruction = env.language_instruction
+    single_obs = next(iter(obs.obs.values()))
+    cameras = single_obs.info.pop("high_res_cameras", single_obs.cameras)
     logging.debug(f"Reset env")
-    agent.reset(copy.deepcopy(obs), env.language_instruction)
-    logging.debug(f"Reset agent")
     done = False
     truncated = False
     step = 0.0
     rewards = []
     im = []
     while not done and not truncated and max_steps > step:
-        action = agent.act(obs)
-        obs, reward, done, truncated, _ = env.step(action)
-        cameras = obs.info.pop("high_res_cameras", obs.cameras)
+        if obs.language_instruction is None:
+            obs.language_instruction = env.language_instruction
+        obs, reward, done, truncated, _ = env.chunk_step(agent.act(obs), max_steps=max_steps - int(step))
+        if obs.language_instruction is None:
+            obs.language_instruction = env.language_instruction
+        single_obs = next(iter(obs.obs.values()))
+        cameras = single_obs.info.pop("high_res_cameras", single_obs.cameras)
         reward = float(reward)
         done, truncated = bool(done), bool(truncated)
-        step += 1
+        step += env.last_chunk_steps
         rewards.append(reward)
         im.append(cameras)
 
@@ -452,7 +503,7 @@ def create_env_agent(agent_config: AgentConfig, cfg: EvalConfig) -> tuple[Evalua
     key = (cfg.env_id, agent_config.host, agent_config.port)
     if key not in per_process_cache:
         logging.info(f"env {cfg.env_id} not available, creating new env and agent")
-        env = EvaluatorEnv.make(cfg.env_id, **cfg.env_kwargs)
+        env = EvaluatorEnv.make(cfg.env_id, execution_horizon=cfg.execution_horizon, **cfg.env_kwargs)
         logging.info("done creating env")
         agent = RemoteAgent(
             agent_config.host,
@@ -460,6 +511,7 @@ def create_env_agent(agent_config: AgentConfig, cfg: EvalConfig) -> tuple[Evalua
             agent_config.agent_name,
             on_same_machine=cfg.same_machine,
             jpeg_encoding=cfg.jpeg_encoding,
+            image_size=cfg.image_size,
         )
         logging.info("done creating agent")
         per_process_cache[key] = (env, agent)

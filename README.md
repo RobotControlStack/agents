@@ -161,14 +161,14 @@ Currently located on the branch `diffusion_policy`.
 ## Usage
 To start an vlagents server use the `start-server` command where `kwargs` is a dictionary of the constructor arguments of the policy you want to start e.g.
 ```shell
-# lerobot act (n_action_steps is the executed horizon of the action chunk)
-python -m vlagents start-server lerobot --port 8080 --host 0.0.0.0 --kwargs '{"policy_name": "act", "checkpoint_path": "<path to pretrained_model>", "n_action_steps": 1}'
+# lerobot act
+python -m vlagents start-server lerobot --port 8080 --host 0.0.0.0 --kwargs '{"policy_name": "act", "checkpoint_path": "<path to pretrained_model>"}'
 
 # lerobot pi05
-python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "pi05", "checkpoint_path": "<path to pretrained_model>", "n_action_steps": 1}'
+python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "pi05", "checkpoint_path": "<path to pretrained_model>"}'
 
 # lerobot xvla
-uv run python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "xvla", "checkpoint_path": "<path to pretrained_model>", "n_action_steps": 1, "rename_map": {"head": "image", "left_wrist": "image2", "right_wrist": "image3"}}'
+uv run python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "xvla", "checkpoint_path": "<path to pretrained_model>", "rename_map": {"head": "image", "left_wrist": "image2", "right_wrist": "image3"}}'
 
 
 # octo
@@ -185,6 +185,8 @@ python -m vlagents start-server vjepa --port=20997 --host=0.0.0.0 --kwargs='{"cf
 ```
 
 
+Each policy returns an `Act` action chunk. During evaluation, `EvaluatorEnv.chunk_step` applies the chunk one environment step at a time. Configure `execution_horizon` in an evaluation config to cap how many actions from each chunk are executed before requesting a new one.
+
 There is also the `run-eval-during-training` command to evaluate a model during training, so a single checkpoint.
 The `run-eval-post-training` command evaluates a range of checkpoints in parallel.
 In both cases environment and arguments as well as policy and arguments and wandb config for logging can be passed as CLI arguments.
@@ -192,7 +194,8 @@ In both cases environment and arguments as well as policy and arguments and wand
 
 ## Adding your own environment
 ```python
-from vlagents.evaluator_envs import EvaluatorEnv, Obs, Act
+from vlagents.evaluator_envs import EvaluatorEnv
+from vlagents.policies import Act, Obs, SingleAct
 from typing import Any
 
 class YourEnv(EvaluatorEnv):
@@ -201,7 +204,7 @@ class YourEnv(EvaluatorEnv):
         # translated your observation
         return Obs()
 
-    def step(self, action: Act) -> tuple[Obs, float, bool, bool, dict]:
+    def step(self, action: dict[str, SingleAct]) -> tuple[Obs, float, bool, bool, dict]:
         # step your env
         obs, reward, success, truncated, info = self.env.step(action)
         return self.translate_obs(obs), reward, success, truncated, info

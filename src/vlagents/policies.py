@@ -66,7 +66,10 @@ class Act:
 
 class Agent:
     def __init__(
-        self, default_checkpoint_path: str, checkpoint_path: str | None = None, checkpoint_step: int | None = None
+        self,
+        default_checkpoint_path: str,
+        checkpoint_path: str | None = None,
+        checkpoint_step: int | None = None,
     ) -> None:
         self.checkpoint_step = checkpoint_step
         self.default_checkpoint_path = default_checkpoint_path
@@ -206,7 +209,6 @@ class Agent:
 
 
 class TestAgent(Agent):
-
     def __init__(self, **kwargs) -> None:
         super().__init__(default_checkpoint_path="", **kwargs)
         self.i = 0
@@ -237,13 +239,11 @@ class TestAgent(Agent):
 
 
 class LeRobotPolicy(Agent):
-
     def __init__(
         self,
         policy_name: str = "pi05",
         default_checkpoint_path: str = "lerobot/pi05_base",
         device: str = "cuda:0",
-        n_action_steps: int = 30,
         temporal_ensemble_coeff: float | None = None,
         rename_map: dict[str, str] | None = None,
         **kwargs,
@@ -252,7 +252,6 @@ class LeRobotPolicy(Agent):
 
         self.policy_name = policy_name
         self.device = device
-        self.n_action_steps = n_action_steps
         self.temporal_ensemble_coeff = temporal_ensemble_coeff
         checkpoint_path = self.checkpoint_path or self.default_checkpoint_path
         if self.checkpoint_step is not None:
@@ -280,7 +279,6 @@ class LeRobotPolicy(Agent):
         # from vlagents import train_xvla
 
         self.policy = get_policy_class(self.policy_name).from_pretrained(self.path)
-        self.policy.config.n_action_steps = self.n_action_steps
 
         if self.policy_name == "act":
             from lerobot.policies.act.modeling_act import ACTTemporalEnsembler
@@ -293,9 +291,6 @@ class LeRobotPolicy(Agent):
                 )
             elif hasattr(self.policy, "temporal_ensembler"):
                 delattr(self.policy, "temporal_ensembler")
-
-            if self.policy.config.temporal_ensemble_coeff is None:
-                self.policy._action_queue = deque([], maxlen=self.policy.config.n_action_steps)
 
         self._expected_image_shapes = {
             key.removeprefix("observation.images."): tuple(feature.shape)
@@ -352,18 +347,21 @@ class LeRobotPolicy(Agent):
         observation = self.preprocessor(observation)
 
         with torch.inference_mode():
-            action = self.policy.select_action(observation)
+            action = self.policy.predict_action_chunk(observation)
         action = self.postprocessor(action)
 
         if isinstance(action, torch.Tensor):
             action = action.detach().float().cpu().numpy()
 
-        action = np.squeeze(action, axis=0)
-        return self._single_step_act(robot_name, np.asarray(action[:-1], dtype=np.float32), gripper=float(action[-1]))
+        action_chunk = np.squeeze(action, axis=0)  # remove batch dimension
+        if action_chunk.ndim == 1:
+            action_chunk = action_chunk[None, :]
+        if action_chunk.shape[-1] < 1:
+            raise ValueError("LeRobot action chunk must include a gripper dimension")
+        return self._chunk_act(robot_name, action_chunk[:, :-1], grippers=action_chunk[:, -1])
 
 
 class VjepaAC(Agent):
-
     def __init__(
         self,
         cfg_path: str,
@@ -430,7 +428,10 @@ class VjepaAC(Agent):
 
         # load model
         encoder, predictor = torch.hub.load(
-            "./", self.model_name, source="local", pretrained=True  # root of the vjepa source code  # model type
+            "./",
+            self.model_name,
+            source="local",
+            pretrained=True,  # root of the vjepa source code  # model type
         )
 
         # load model to cuda
@@ -499,21 +500,18 @@ class VjepaAC(Agent):
             )
 
             # predicted action chunk: [rollout_horizon, action_dim]
-            actions = self.world_model.infer_next_action(z_n, s_n, self.goal_rep)
-            first_action = np.asarray(actions[0].cpu(), dtype=np.float32)
+            actions = np.asarray(self.world_model.infer_next_action(z_n, s_n, self.goal_rep).cpu(), dtype=np.float32)
             # VJEPA uses the opposite gripper convention from vlagents.
-            first_action[-1] = 1 - first_action[-1]
+            actions[:, -1] = 1 - actions[:, -1]
 
-        return self._single_step_act(robot_name, first_action[:-1], gripper=float(first_action[-1]))
+        return self._chunk_act(robot_name, actions[:, :-1], grippers=actions[:, -1])
 
 
 class OpenPiModel(Agent):
-
     def __init__(
         self,
         train_config_name: str = "pi0_droid",
         default_checkpoint_path: str = "gs://openpi-assets/checkpoints/pi0_droid",
-        execution_horizon=20,
         **kwargs,
     ) -> None:
         super().__init__(default_checkpoint_path=default_checkpoint_path, **kwargs)
@@ -523,7 +521,6 @@ class OpenPiModel(Agent):
         self.openpi_path = self.checkpoint_path.format(checkpoint_step=self.checkpoint_step)
 
         self.cfg = config.get_config(train_config_name)
-        self.execution_horizon = execution_horizon
 
     def initialize(self):
         from openpi.policies import policy_config
@@ -795,7 +792,6 @@ class OctoActionDistribution(OctoModel):
 
 
 class OpenVLADistribution(OpenVLAModel):
-
     def act(self, obs: Obs) -> Act:
         import time
 
@@ -822,7 +818,7 @@ class OpenVLADistribution(OpenVLAModel):
             actions.append(self.vla.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False))
 
         t2 = time.time()
-        logging.info(f"needed time for {len(actions)} was {t2-t1}s")
+        logging.info(f"needed time for {len(actions)} was {t2 - t1}s")
 
         actions = np.stack(actions).astype(np.float32).reshape(batch_size, num_samples, -1)
         means = np.mean(actions, axis=1).astype(np.float32)
