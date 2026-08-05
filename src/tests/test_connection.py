@@ -4,8 +4,8 @@ from time import sleep
 import numpy as np
 
 from vlagents.client import RemoteAgent
-from vlagents.evaluator_envs import start_server
-from vlagents.policies import Obs, SingleObs
+from vlagents.eval import start_server
+from vlagents.policies.interface import Obs, SingleObs
 
 
 def _make_obs(data: np.ndarray, instruction: str = "do something") -> Obs:

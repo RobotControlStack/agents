@@ -10,7 +10,7 @@ import rpyc
 import simplejpeg
 from PIL import Image
 
-from vlagents.policies import Act, Agent, CameraDataType, Obs, SharedMemoryPayload
+from vlagents.policies.interface import Act, Agent, CameraDataType, Obs, SharedMemoryPayload
 
 
 def dataclass_from_dict(klass, value):
@@ -209,7 +209,7 @@ class RemoteAgent(Agent):
 
 if __name__ == "__main__":
     # to test the connection
-    from vlagents.policies import SingleObs
+    from vlagents.policies.interface import SingleObs
 
     agent = RemoteAgent("localhost", 8080, "test")
     obs = Obs(

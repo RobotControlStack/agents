@@ -1,13 +1,9 @@
 if __name__ == "__main__":
-    import datetime
     import os
 
-    import numpy as np
-    from PIL import Image
 
-    from lerobot.envs.libero import LiberoEnv
     from vlagents.__main__ import _run_eval
-    from vlagents.evaluator_envs import AgentConfig, EvalConfig
+    from vlagents.envs.interface import AgentConfig, EvalConfig
 
     # main_app()
     # test

@@ -1,7 +1,7 @@
 import numpy as np
 
 from vlagents.__main__ import _merge_env_split_results
-from vlagents.evaluator_envs import EvalConfig
+from vlagents.envs.interface import EvalConfig
 
 
 def test_merge_env_split_results_keeps_distinct_seeded_cfgs():

@@ -1,27 +1,12 @@
 
-import copy
-import datetime
-import json
 import logging
 import os
-import shlex
-import subprocess
-import sys
-from abc import ABC
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from time import sleep
 from typing import Any
 
-import gymnasium as gym
 import numpy as np
-from simple_slurm import Slurm
-from tqdm import tqdm
 
-from vlagents.client import RemoteAgent
-from vlagents.envs.interface import EvaluatorEnv
-from vlagents.policies import Act, Agent, Obs, SingleAct, SingleObs
+from vlagents.envs.interface import EvalEnv
+from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
 
 
@@ -29,7 +14,7 @@ from vlagents.policies import Act, Agent, Obs, SingleAct, SingleObs
 
 
 
-class Libero(EvaluatorEnv):
+class Libero(EvalEnv):
     def __init__(self, env_id: str, reset_steps: int = 14, **env_kwargs) -> None:
         """
         For supported env_kwargs checkout ControlEnv class in libero.
@@ -52,7 +37,7 @@ class Libero(EvaluatorEnv):
 
     @staticmethod
     def n_tasks(env_id: str) -> int:
-        from libero.libero import benchmark, get_libero_path
+        from libero.libero import benchmark
 
         benchmark_dict = benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[env_id]()
@@ -147,9 +132,9 @@ class Libero(EvaluatorEnv):
         return self._language_instruction
 
 
-EvaluatorEnv.register("libero_10", Libero)
-EvaluatorEnv.register("libero_90", Libero)
-EvaluatorEnv.register("libero_100", Libero)
-EvaluatorEnv.register("libero_spatial", Libero)
-EvaluatorEnv.register("libero_object", Libero)
-EvaluatorEnv.register("libero_goal", Libero)
+EvalEnv.register("libero_10", Libero)
+EvalEnv.register("libero_90", Libero)
+EvalEnv.register("libero_100", Libero)
+EvalEnv.register("libero_spatial", Libero)
+EvalEnv.register("libero_object", Libero)
+EvalEnv.register("libero_goal", Libero)

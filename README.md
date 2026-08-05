@@ -185,7 +185,7 @@ python -m vlagents start-server vjepa --port=20997 --host=0.0.0.0 --kwargs='{"cf
 ```
 
 
-Each policy returns an `Act` action chunk. During evaluation, `EvaluatorEnv.chunk_step` applies the chunk one environment step at a time. Configure `execution_horizon` in an evaluation config to cap how many actions from each chunk are executed before requesting a new one.
+Each policy returns an `Act` action chunk. During evaluation, `EvalEnv.chunk_step` applies the chunk one environment step at a time. Configure `execution_horizon` in an evaluation config to cap how many actions from each chunk are executed before requesting a new one.
 
 Images are resized by `RemoteAgent` before shared-memory or JPEG transport. Set `image_size` in an evaluation config to a `[width, height]` pair (default `[224, 224]`), or `null` to keep native resolution.
 
@@ -196,11 +196,11 @@ In both cases environment and arguments as well as policy and arguments and wand
 
 ## Adding your own environment
 ```python
-from vlagents.evaluator_envs import EvaluatorEnv
-from vlagents.policies import Act, Obs, SingleAct
+from vlagents.envs.interface import EvalEnv
+from vlagents.policies.interface import Act, Obs, SingleAct
 from typing import Any
 
-class YourEnv(EvaluatorEnv):
+class YourEnv(EvalEnv):
 
     def translate_obs(self, obs: dict[str, Any]) -> Obs:
         # translated your observation
@@ -225,13 +225,14 @@ class YourEnv(EvaluatorEnv):
         # do imports required by your env
         import libero
 
-EvaluatorEnv.register("your-env-id", YourEnv)
+EvalEnv.register("your-env-id", YourEnv)
 ```
 
 ## Adding your own policy
 ```python
-from vlagents.policies import Agent, AGENTS
-from vlagents.evaluator_envs import Obs, Act
+from vlagents import AGENTS
+from vlagents.policies.interface import Agent
+from vlagents.policies.interface import Obs, Act
 from typing import Any
 import numpy as np
 
@@ -258,12 +259,12 @@ AGENTS["your-agent-id"] = YourAgent
 ## Contribution
 
 ### New Policy
-In order to extend the library with a new policy network, extend the `Agent` class in [policies.py](src/vlagents/policies.py).
+In order to extend the library with a new policy network, extend the `Agent` class in [policies/interface.py](src/vlagents/policies/interface.py).
 It is important to only invoke policy specific imports in the class functions, as each policy can have its own dependencies.
 
 
 ### New Environment
-In order to extend the library with a new agent environment, extend the `EvaluatorEnv` class in [evaluator_envs.py](src/vlagents/evaluator_envs.py).
+In order to extend the library with a new agent environment, extend the `EvalEnv` class in [envs/interface.py](src/vlagents/envs/interface.py).
 
 
 ### Developer Tools

@@ -1,29 +1,13 @@
-import copy
-import datetime
-import json
-import logging
-import os
-import shlex
-import subprocess
-import sys
-from abc import ABC
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from time import sleep
-from typing import Any
+import importlib
+from typing import Any, ClassVar
 
-import gymnasium as gym
 import numpy as np
-from simple_slurm import Slurm
-from tqdm import tqdm
 
-from vlagents.client import RemoteAgent
-from vlagents.envs.interface import EvaluatorEnv
-from vlagents.policies import Act, Agent, Obs, SingleAct, SingleObs
+from vlagents.envs.interface import EvalEnv
+from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
-class RCSDuoBench(EvaluatorEnv):
-    INSTRUCTIONS = {}
+class RCSDuoBench(EvalEnv):
+    INSTRUCTIONS: ClassVar[dict[str, str]] = {}
 
     def __init__(self, env_id, **env_kwargs):
         self.robot_keys: str = env_kwargs.pop("robot_keys", ["left", "right"])
@@ -93,14 +77,14 @@ class RCSDuoBench(EvaluatorEnv):
         )
 
 
-EvaluatorEnv.register("duobench/ball_maze", RCSDuoBench)
-EvaluatorEnv.register("duobench/bin_sort", RCSDuoBench)
-EvaluatorEnv.register("duobench/block_balance", RCSDuoBench)
-EvaluatorEnv.register("duobench/carry_pot", RCSDuoBench)
-EvaluatorEnv.register("duobench/join_blocks", RCSDuoBench)
-EvaluatorEnv.register("duobench/hinge_chest", RCSDuoBench)
-EvaluatorEnv.register("duobench/pour_marbles", RCSDuoBench)
-EvaluatorEnv.register("duobench/spring_door", RCSDuoBench)
-EvaluatorEnv.register("duobench/transfer_cube", RCSDuoBench)
-EvaluatorEnv.register("duobench/transfer_gate", RCSDuoBench)
-EvaluatorEnv.register("duobench/transfer_reorient", RCSDuoBench)
+EvalEnv.register("duobench/ball_maze", RCSDuoBench)
+EvalEnv.register("duobench/bin_sort", RCSDuoBench)
+EvalEnv.register("duobench/block_balance", RCSDuoBench)
+EvalEnv.register("duobench/carry_pot", RCSDuoBench)
+EvalEnv.register("duobench/join_blocks", RCSDuoBench)
+EvalEnv.register("duobench/hinge_chest", RCSDuoBench)
+EvalEnv.register("duobench/pour_marbles", RCSDuoBench)
+EvalEnv.register("duobench/spring_door", RCSDuoBench)
+EvalEnv.register("duobench/transfer_cube", RCSDuoBench)
+EvalEnv.register("duobench/transfer_gate", RCSDuoBench)
+EvalEnv.register("duobench/transfer_reorient", RCSDuoBench)

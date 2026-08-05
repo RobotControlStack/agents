@@ -1,20 +1,8 @@
-import base64
-import json
-import logging
-import os
-from collections import deque
-from dataclasses import dataclass, field
-from functools import partial, reduce
-from multiprocessing import resource_tracker, shared_memory
-from operator import getitem
-from pathlib import Path
-from typing import Any, Union
 
 import numpy as np
-import simplejpeg
 from PIL import Image
 from vlagents import register_agent
-from vlagents.policies.interface import Agent
+from vlagents.policies.interface import Act, Agent, Obs
 
 class VjepaAC(Agent):
     def __init__(

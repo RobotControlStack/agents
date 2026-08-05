@@ -1,5 +1,4 @@
 
-import copy
 import datetime
 import json
 import logging
@@ -7,21 +6,19 @@ import os
 import shlex
 import subprocess
 import sys
-from abc import ABC
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from time import sleep
 from typing import Any
 
-import gymnasium as gym
 import numpy as np
 from simple_slurm import Slurm
 from tqdm import tqdm
 
 from vlagents.client import RemoteAgent
-from vlagents.policies import Act, Agent, Obs, SingleAct, SingleObs
-from vlagents.wrappers import HumanCameraWrapper
+from vlagents.envs.interface import AgentConfig, EvalConfig, EvalEnv
+from vlagents.policies.interface import Agent
 
 logging.basicConfig(
     format="%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s",
@@ -71,7 +68,7 @@ def _write_camera_mp4(frames: list[np.ndarray], output_path: Path, fps: int = 30
 
 
 def single_eval(
-    env: EvaluatorEnv, agent: Agent, max_steps: int, ith_episode: int, start_seed: int
+    env: EvalEnv, agent: Agent, max_steps: int, ith_episode: int, start_seed: int
 ) -> tuple[list[float], list[float], list[float]]:
     logging.debug(f"Starting evaluation")
     obs, _ = env.reset(seed=start_seed + ith_episode)  # ensure different seed for each episode
@@ -119,12 +116,12 @@ def single_eval(
 per_process_cache = {}
 
 
-def create_env_agent(agent_config: AgentConfig, cfg: EvalConfig) -> tuple[EvaluatorEnv, RemoteAgent]:
+def create_env_agent(agent_config: AgentConfig, cfg: EvalConfig) -> tuple[EvalEnv, RemoteAgent]:
     logging.debug(f"retrieving env {cfg.env_id} and agent")
     key = (cfg.env_id, agent_config.host, agent_config.port)
     if key not in per_process_cache:
         logging.info(f"env {cfg.env_id} not available, creating new env and agent")
-        env = EvaluatorEnv.make(cfg.env_id, execution_horizon=cfg.execution_horizon, **cfg.env_kwargs)
+        env = EvalEnv.make(cfg.env_id, execution_horizon=cfg.execution_horizon, **cfg.env_kwargs)
         logging.info("done creating env")
         agent = RemoteAgent(
             agent_config.host,

@@ -1,25 +1,11 @@
-import copy
-import datetime
-import json
 import logging
-import os
-import shlex
-import subprocess
-import sys
 from abc import ABC
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from time import sleep
+from dataclasses import dataclass
 from typing import Any
 
 import gymnasium as gym
-import numpy as np
-from simple_slurm import Slurm
-from tqdm import tqdm
 
-from vlagents.client import RemoteAgent
-from vlagents.policies import Act, Agent, Obs, SingleAct, SingleObs
+from vlagents.policies.interface import Act, Obs, SingleAct
 
 logging.basicConfig(
     format="%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s",
@@ -28,8 +14,8 @@ logging.basicConfig(
 )
 
 
-class EvaluatorEnv(ABC):
-    ENVS: dict[str, "EvaluatorEnv"] = {}
+class EvalEnv(ABC):
+    ENVS: dict[str, "EvalEnv"] = {}
 
     def __init__(self, env_id: str, execution_horizon: int | None = None, **env_kwargs) -> None:
         self.do_import()
@@ -70,12 +56,12 @@ class EvaluatorEnv(ABC):
         raise NotImplementedError
 
     @staticmethod
-    def register(env_id: str, env: "EvaluatorEnv") -> None:
-        EvaluatorEnv.ENVS[env_id] = env
+    def register(env_id: str, env: "EvalEnv") -> None:
+        EvalEnv.ENVS[env_id] = env
 
     @staticmethod
-    def make(env_id: str, **env_kwargs) -> "EvaluatorEnv":
-        return EvaluatorEnv.ENVS[env_id](env_id, **env_kwargs)
+    def make(env_id: str, **env_kwargs) -> "EvalEnv":
+        return EvalEnv.ENVS[env_id](env_id, **env_kwargs)
 
     @staticmethod
     def do_import():

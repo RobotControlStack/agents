@@ -1,26 +1,13 @@
 import copy
-import datetime
-import json
+import importlib
 import logging
-import os
-import shlex
-import subprocess
-import sys
-from abc import ABC
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from time import sleep
-from typing import Any
+from typing import Any, ClassVar
 
 import gymnasium as gym
 import numpy as np
-from simple_slurm import Slurm
-from tqdm import tqdm
 
-from vlagents.client import RemoteAgent
-from vlagents.envs.interface import EvaluatorEnv
-from vlagents.policies import Act, Agent, Obs, SingleAct, SingleObs
+from vlagents.envs.interface import EvalEnv
+from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
 class HumanCameraWrapper(gym.ObservationWrapper):
     """
@@ -49,8 +36,8 @@ class HumanCameraWrapper(gym.ObservationWrapper):
         observation["sensor_data"]["base_camera"] = dict(rgb=self.env.render())
         return observation
 
-class ManiSkill(EvaluatorEnv):
-    INSTRUCTIONS = {
+class ManiSkill(EvalEnv):
+    INSTRUCTIONS: ClassVar[dict[str, str]] = {
         "LiftPegUpright-v1": "lift the peg upright",
         "PegInsertionSide-v1": "insert the peg from the side",
         "PickCube-v1": "pick up the cube",
@@ -129,14 +116,14 @@ class ManiSkill(EvaluatorEnv):
         import mani_skill.envs
 
 
-EvaluatorEnv.register("LiftPegUpright-v1", ManiSkill)
-EvaluatorEnv.register("PegInsertionSide-v1", ManiSkill)
-EvaluatorEnv.register("PickCube-v1", ManiSkill)
-EvaluatorEnv.register("PlugCharger-v1", ManiSkill)
-EvaluatorEnv.register("PullCube-v1", ManiSkill)
-EvaluatorEnv.register("PullCubeTool-v1", ManiSkill)
-EvaluatorEnv.register("PushCube-v1", ManiSkill)
-EvaluatorEnv.register("PushT-v1", ManiSkill)
-EvaluatorEnv.register("RollBall-v1", ManiSkill)
-EvaluatorEnv.register("StackCube-v1", ManiSkill)
-EvaluatorEnv.register("PokeCube-v1", ManiSkill)
+EvalEnv.register("LiftPegUpright-v1", ManiSkill)
+EvalEnv.register("PegInsertionSide-v1", ManiSkill)
+EvalEnv.register("PickCube-v1", ManiSkill)
+EvalEnv.register("PlugCharger-v1", ManiSkill)
+EvalEnv.register("PullCube-v1", ManiSkill)
+EvalEnv.register("PullCubeTool-v1", ManiSkill)
+EvalEnv.register("PushCube-v1", ManiSkill)
+EvalEnv.register("PushT-v1", ManiSkill)
+EvalEnv.register("RollBall-v1", ManiSkill)
+EvalEnv.register("StackCube-v1", ManiSkill)
+EvalEnv.register("PokeCube-v1", ManiSkill)
