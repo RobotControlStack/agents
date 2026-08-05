@@ -21,7 +21,6 @@ logging.basicConfig(
 
 @rpyc.service
 class AgentService(rpyc.Service):
-    # TODO: think if we should identify the connection with the instance
     GIT_ID = "git_id_remote.txt"
     GIT_ID_SUBMODULES = "git_id_submodules_remote.txt"
     GIT_DIFF = "git_diff_remote.txt"
@@ -71,7 +70,6 @@ class AgentService(rpyc.Service):
 
     @rpyc.exposed
     def git_status(self) -> str:
-        # TODO: put git commit hash and git diff into temp file and read it into string and send it over
         with TemporaryDirectory() as tmp_dir:
             # git commit has id
             os.system(f'git log --format="%H" -n 1 > {os.path.join(tmp_dir, self.GIT_ID)}')
