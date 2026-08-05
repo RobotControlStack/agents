@@ -187,6 +187,8 @@ python -m vlagents start-server vjepa --port=20997 --host=0.0.0.0 --kwargs='{"cf
 
 Each policy returns an `Act` action chunk. During evaluation, `EvaluatorEnv.chunk_step` applies the chunk one environment step at a time. Configure `execution_horizon` in an evaluation config to cap how many actions from each chunk are executed before requesting a new one.
 
+Images are resized by `RemoteAgent` before shared-memory or JPEG transport. Set `image_size` in an evaluation config to a `[width, height]` pair (default `[224, 224]`), or `null` to keep native resolution.
+
 There is also the `run-eval-during-training` command to evaluate a model during training, so a single checkpoint.
 The `run-eval-post-training` command evaluates a range of checkpoints in parallel.
 In both cases environment and arguments as well as policy and arguments and wandb config for logging can be passed as CLI arguments.
