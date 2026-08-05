@@ -26,7 +26,8 @@ def register_env(name: str, env_class: type["EvalEnv"]) -> None:
 
 from vlagents.envs import duobench, libero, maniskill  # noqa: E402, F401
 from vlagents.envs.interface import EvalEnv
+from vlagents.policies import lerobot, octo, openpi, openvla, vjepa  # noqa: E402, F401
 from vlagents.policies.interface import Agent
 
 __version__ = "0.2.0"
-__all__ = ["__doc__", "__version__", "AGENTS", "ENVS"]
+__all__ = ["__doc__", "__version__", "AGENTS", "ENVS", "register_agent", "register_env", "EvalEnv", "Agent"]
