@@ -10,7 +10,7 @@ from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
 
 class Libero(EvalEnv):
-    def __init__(self, env_id: str, reset_steps: int = 14, **env_kwargs) -> None:
+    def __init__(self, env_id: str, reset_steps: int = 14, execution_horizon: int | None = None, **env_kwargs) -> None:
         """
         For supported env_kwargs checkout ControlEnv class in libero.
         We add the following env_kwargs on top:
@@ -19,16 +19,9 @@ class Libero(EvalEnv):
 
         """
         logging.info("Creating Libero env")
-        self.env_kwargs = env_kwargs
         self.reset_steps = reset_steps
-        self.control_mode = self.env_kwargs.pop("control_mode", "relative")
-        self.env, self._language_instruction, self.task_name, self.task_suite, self.task_id, self.task = self._make_gym(
-            env_id, **self.env_kwargs
-        )
-        logging.info(
-            f"Created Libero env, task suite: {env_id}, task id: {self.task_id}, task name {self.task_name}, instruction: {self._language_instruction}"
-        )
-        self.env_id = env_id
+        self.control_mode = env_kwargs.pop("control_mode", "relative")
+        super().__init__(env_id, execution_horizon=execution_horizon, **env_kwargs)
 
     @staticmethod
     def n_tasks(env_id: str) -> int:
@@ -56,6 +49,24 @@ class Libero(EvalEnv):
         )
 
         return env, task.language, task.name, task_suite, task_id, task
+
+    def make_gym(self):
+        (
+            env,
+            self._language_instruction,
+            self.task_name,
+            self.task_suite,
+            self.task_id,
+            self.task,
+        ) = self._make_gym(self.env_id, **self.env_kwargs)
+        logging.info(
+            f"Created Libero env, task suite: {self.env_id}, task id: {self.task_id}, task name {self.task_name}, instruction: {self._language_instruction}"
+        )
+        return env
+
+    def do_import(self):
+        # _make_gym imports LIBERO lazily so importing vlagents does not require it.
+        pass
 
     def translate_obs(self, obs: dict[str, Any]) -> Obs:
         joints = None

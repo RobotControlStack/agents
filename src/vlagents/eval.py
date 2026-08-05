@@ -121,7 +121,7 @@ def create_env_agent(agent_config: AgentConfig, cfg: EvalConfig) -> tuple[EvalEn
     key = (cfg.env_id, agent_config.host, agent_config.port)
     if key not in per_process_cache:
         logging.info(f"env {cfg.env_id} not available, creating new env and agent")
-        env = EvalEnv.make(cfg.env_id, execution_horizon=cfg.execution_horizon, **cfg.env_kwargs)
+        env = EvalEnv.from_id(cfg.env_id, execution_horizon=cfg.execution_horizon, **cfg.env_kwargs)
         logging.info("done creating env")
         agent = RemoteAgent(
             agent_config.host,

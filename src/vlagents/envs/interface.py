@@ -18,10 +18,11 @@ logging.basicConfig(
 class EvalEnv(ABC):
 
     def __init__(self, env_id: str, execution_horizon: int | None = None, **env_kwargs) -> None:
-        self.do_import()
-        self.env = gym.make(env_id, **env_kwargs)
         self.env_id = env_id
+        self.env_kwargs = env_kwargs
         self.execution_horizon = execution_horizon
+        self.do_import()
+        self.env = self.make_gym()
         self.last_chunk_steps = 0
 
     def chunk_step(self, actions: Act, max_steps: int | None = None) -> tuple[Obs, float, bool, bool, dict[str, Any]]:
@@ -55,13 +56,17 @@ class EvalEnv(ABC):
     def language_instruction(self) -> str:
         raise NotImplementedError
 
-    @staticmethod
-    def make(env_id: str, **env_kwargs) -> "EvalEnv":
-        return ENVS[env_id](env_id, **env_kwargs)
+    def make_gym(self) -> gym.Env:
+        return gym.make(self.env_id, **self.env_kwargs)
+
+    def do_import(self):
+        raise NotImplementedError
 
     @staticmethod
-    def do_import():
-        raise NotImplementedError
+    def from_id(env_id: str, execution_horizon: int | None = None, **env_kwargs) -> "EvalEnv":
+        if env_id not in ENVS:
+            raise ValueError(f"Unknown environment id {env_id}. Available environments: {list(ENVS.keys())}")
+        return ENVS[env_id](env_id, execution_horizon=execution_horizon, **env_kwargs)
 
 
 @dataclass

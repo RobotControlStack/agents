@@ -196,11 +196,13 @@ In both cases environment and arguments as well as policy and arguments and wand
 
 ## Adding your own environment
 ```python
+from vlagents import register_env
 from vlagents.envs.interface import EvalEnv
 from vlagents.policies.interface import Act, Obs, SingleAct
 from typing import Any
 
 class YourEnv(EvalEnv):
+    # Override make_gym() when this environment is not created with gym.make().
 
     def translate_obs(self, obs: dict[str, Any]) -> Obs:
         # translated your observation
@@ -220,17 +222,16 @@ class YourEnv(EvalEnv):
         # return task instruction
         return "pick up the cube"
 
-    @staticmethod
-    def do_import():
-        # do imports required by your env
+    def do_import(self):
+        # import any packages required by your env
         import libero
 
-EvalEnv.register("your-env-id", YourEnv)
+register_env("your-env-id", YourEnv)
 ```
 
 ## Adding your own policy
 ```python
-from vlagents import AGENTS
+from vlagents import register_agent
 from vlagents.policies.interface import Agent
 from vlagents.policies.interface import Obs, Act
 from typing import Any
@@ -251,7 +252,7 @@ class YourAgent(Agent):
 
     def close(self, *args, **kwargs):
         pass
-AGENTS["your-agent-id"] = YourAgent
+register_agent("your-agent-id", YourAgent)
 ```
 
 
