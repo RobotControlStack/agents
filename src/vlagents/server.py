@@ -10,7 +10,7 @@ import json_numpy
 import rpyc
 
 from vlagents.client import dataclass_from_dict
-from vlagents.policies import Agent, CameraDataType, Obs, SharedMemoryPayload
+from vlagents.policies.interface import Agent, CameraDataType, Obs, SharedMemoryPayload
 
 logging.basicConfig(
     format="%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s",
@@ -21,7 +21,6 @@ logging.basicConfig(
 
 @rpyc.service
 class AgentService(rpyc.Service):
-    # TODO: think if we should identify the connection with the instance
     GIT_ID = "git_id_remote.txt"
     GIT_ID_SUBMODULES = "git_id_submodules_remote.txt"
     GIT_DIFF = "git_diff_remote.txt"
@@ -51,25 +50,15 @@ class AgentService(rpyc.Service):
         assert self._is_initialized, "AgentService not initialized, wait until is_initialized is True"
         # action, done, info
         obs = typing.cast(Obs, dataclass_from_dict(Obs, json_numpy.loads(obs_bytes)))
-        if obs.camera_data_type == CameraDataType.SHARED_MEMORY:
-            obs.cameras = {
-                camera_name: dataclass_from_dict(SharedMemoryPayload, camera_data)
-                for camera_name, camera_data in obs.cameras.items()
-            }
+        for single_obs in obs.obs.values():
+            if single_obs.camera_data_type == CameraDataType.SHARED_MEMORY:
+                single_obs.cameras = {
+                    camera_name: dataclass_from_dict(SharedMemoryPayload, camera_data)
+                    for camera_name, camera_data in single_obs.cameras.items()
+                }
+        if obs.goal_image_data_type == CameraDataType.SHARED_MEMORY and obs.goal_image is not None:
+            obs.goal_image = dataclass_from_dict(SharedMemoryPayload, obs.goal_image)
         return json_numpy.dumps(asdict(self.agent.act(obs)))
-
-    @rpyc.exposed
-    def reset(self, args: bytes) -> str:
-        assert self._is_initialized, "AgentService not initialized, wait until is_initialized is True"
-        # info
-        obs, instruction, kwargs = json_numpy.loads(args)
-        obs_dclass = typing.cast(Obs, dataclass_from_dict(Obs, obs))
-        if obs_dclass.camera_data_type == CameraDataType.SHARED_MEMORY:
-            obs_dclass.cameras = {
-                camera_name: dataclass_from_dict(SharedMemoryPayload, camera_data)
-                for camera_name, camera_data in obs_dclass.cameras.items()
-            }
-        return json_numpy.dumps(self.agent.reset(obs_dclass, instruction, **kwargs))
 
     @rpyc.exposed
     def name(self) -> str:
@@ -81,7 +70,6 @@ class AgentService(rpyc.Service):
 
     @rpyc.exposed
     def git_status(self) -> str:
-        # TODO: put git commit hash and git diff into temp file and read it into string and send it over
         with TemporaryDirectory() as tmp_dir:
             # git commit has id
             os.system(f'git log --format="%H" -n 1 > {os.path.join(tmp_dir, self.GIT_ID)}')

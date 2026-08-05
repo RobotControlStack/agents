@@ -103,6 +103,8 @@ target-version = ["py310"]
 
 [tool.isort]
 profile = "black"
+known_first_party = ["vlagents"]
+known_third_party = ["lerobot", "openpi"]
 
 [tool.mypy]
 ignore_missing_imports = true
@@ -122,3 +124,6 @@ version_scheme = "pep440"
 version_provider = "pep621"
 update_changelog_on_bump = true
 major_version_zero = true
+version_files = [
+  "src/vlagents/__init__.py:__version__",
+]

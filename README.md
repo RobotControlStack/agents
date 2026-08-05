@@ -161,14 +161,14 @@ Currently located on the branch `diffusion_policy`.
 ## Usage
 To start an vlagents server use the `start-server` command where `kwargs` is a dictionary of the constructor arguments of the policy you want to start e.g.
 ```shell
-# lerobot act (n_action_steps is the executed horizon of the action chunk)
-python -m vlagents start-server lerobot --port 8080 --host 0.0.0.0 --kwargs '{"policy_name": "act", "checkpoint_path": "<path to pretrained_model>", "n_action_steps": 1}'
+# lerobot act
+python -m vlagents start-server lerobot --port 8080 --host 0.0.0.0 --kwargs '{"policy_name": "act", "checkpoint_path": "<path to pretrained_model>"}'
 
 # lerobot pi05
-python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "pi05", "checkpoint_path": "<path to pretrained_model>", "n_action_steps": 1}'
+python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "pi05", "checkpoint_path": "<path to pretrained_model>"}'
 
 # lerobot xvla
-uv run python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "xvla", "checkpoint_path": "<path to pretrained_model>", "n_action_steps": 1, "rename_map": {"head": "image", "left_wrist": "image2", "right_wrist": "image3"}}'
+uv run python -m vlagents start-server lerobot --port 20000 --host 0.0.0.0 --kwargs '{"policy_name": "xvla", "checkpoint_path": "<path to pretrained_model>", "rename_map": {"head": "image", "left_wrist": "image2", "right_wrist": "image3"}}'
 
 
 # octo
@@ -185,6 +185,10 @@ python -m vlagents start-server vjepa --port=20997 --host=0.0.0.0 --kwargs='{"cf
 ```
 
 
+Each policy returns an `Act` action chunk. During evaluation, `EvalEnv.chunk_step` applies the chunk one environment step at a time. Configure `execution_horizon` in an evaluation config to cap how many actions from each chunk are executed before requesting a new one.
+
+Images are resized by `RemoteAgent` before shared-memory or JPEG transport. Set `image_size` in an evaluation config to a `[width, height]` pair (default `[224, 224]`), or `null` to keep native resolution.
+
 There is also the `run-eval-during-training` command to evaluate a model during training, so a single checkpoint.
 The `run-eval-post-training` command evaluates a range of checkpoints in parallel.
 In both cases environment and arguments as well as policy and arguments and wandb config for logging can be passed as CLI arguments.
@@ -192,16 +196,19 @@ In both cases environment and arguments as well as policy and arguments and wand
 
 ## Adding your own environment
 ```python
-from vlagents.evaluator_envs import EvaluatorEnv, Obs, Act
+from vlagents import register_env
+from vlagents.envs.interface import EvalEnv
+from vlagents.policies.interface import Act, Obs, SingleAct
 from typing import Any
 
-class YourEnv(EvaluatorEnv):
+class YourEnv(EvalEnv):
+    # Override make_gym() when this environment is not created with gym.make().
 
     def translate_obs(self, obs: dict[str, Any]) -> Obs:
         # translated your observation
         return Obs()
 
-    def step(self, action: Act) -> tuple[Obs, float, bool, bool, dict]:
+    def step(self, action: dict[str, SingleAct]) -> tuple[Obs, float, bool, bool, dict]:
         # step your env
         obs, reward, success, truncated, info = self.env.step(action)
         return self.translate_obs(obs), reward, success, truncated, info
@@ -215,18 +222,18 @@ class YourEnv(EvaluatorEnv):
         # return task instruction
         return "pick up the cube"
 
-    @staticmethod
-    def do_import():
-        # do imports required by your env
+    def do_import(self):
+        # import any packages required by your env
         import libero
 
-EvaluatorEnv.register("your-env-id", YourEnv)
+register_env("your-env-id", YourEnv)
 ```
 
 ## Adding your own policy
 ```python
-from vlagents.policies import Agent, AGENTS
-from vlagents.evaluator_envs import Obs, Act
+from vlagents import register_agent
+from vlagents.policies.interface import Agent
+from vlagents.policies.interface import Obs, Act
 from typing import Any
 import numpy as np
 
@@ -245,7 +252,7 @@ class YourAgent(Agent):
 
     def close(self, *args, **kwargs):
         pass
-AGENTS["your-agent-id"] = YourAgent
+register_agent("your-agent-id", YourAgent)
 ```
 
 
@@ -253,12 +260,12 @@ AGENTS["your-agent-id"] = YourAgent
 ## Contribution
 
 ### New Policy
-In order to extend the library with a new policy network, extend the `Agent` class in [policies.py](src/vlagents/policies.py).
+In order to extend the library with a new policy network, extend the `Agent` class in [policies/interface.py](src/vlagents/policies/interface.py).
 It is important to only invoke policy specific imports in the class functions, as each policy can have its own dependencies.
 
 
 ### New Environment
-In order to extend the library with a new agent environment, extend the `EvaluatorEnv` class in [evaluator_envs.py](src/vlagents/evaluator_envs.py).
+In order to extend the library with a new agent environment, extend the `EvalEnv` class in [envs/interface.py](src/vlagents/envs/interface.py).
 
 
 ### Developer Tools
