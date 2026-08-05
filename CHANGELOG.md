@@ -1,3 +1,26 @@
+## v0.3.0 (2026-08-05)
+
+### Feat
+
+- resizing now happens transperantly in the transport layer
+
+### Fix
+
+- goal image handling
+
+### Refactor
+
+- **envs**: factory with from_id, gym with make_gym
+- register env into init
+- fix import paths
+- **envs**: split into seperate envs
+- move envs interface into envs folder
+- **policies**: extracted into own files
+- deleted unused code
+- env interface includes action chunking
+- adapt policies to the new act/obs interface
+- new observation and action interface
+
 ## v0.2.0 (2026-06-20)
 
 ### Feat

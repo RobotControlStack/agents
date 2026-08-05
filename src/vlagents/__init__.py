@@ -29,5 +29,5 @@ from vlagents.envs.interface import EvalEnv
 from vlagents.policies import lerobot, octo, openpi, openvla, vjepa  # noqa: E402, F401
 from vlagents.policies.interface import Agent
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = ["__doc__", "__version__", "AGENTS", "ENVS", "register_agent", "register_env", "EvalEnv", "Agent"]
