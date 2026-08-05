@@ -1,4 +1,3 @@
-
 import logging
 import os
 from typing import Any
@@ -7,11 +6,6 @@ import numpy as np
 
 from vlagents.envs.interface import EvalEnv
 from vlagents.policies.interface import Obs, SingleAct, SingleObs
-
-
-
-
-
 
 
 class Libero(EvalEnv):

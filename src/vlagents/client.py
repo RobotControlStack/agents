@@ -10,7 +10,13 @@ import rpyc
 import simplejpeg
 from PIL import Image
 
-from vlagents.policies.interface import Act, Agent, CameraDataType, Obs, SharedMemoryPayload
+from vlagents.policies.interface import (
+    Act,
+    Agent,
+    CameraDataType,
+    Obs,
+    SharedMemoryPayload,
+)
 
 
 def dataclass_from_dict(klass, value):

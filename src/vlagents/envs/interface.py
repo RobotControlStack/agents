@@ -68,7 +68,6 @@ class EvalEnv(ABC):
         raise NotImplementedError
 
 
-
 @dataclass
 class EvalConfig:
     env_id: str
@@ -89,4 +88,3 @@ class AgentConfig:
     python_path: str = "python"
     """modify this if you want to use a specific python environment """
     port: int = 8080
-

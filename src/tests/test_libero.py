@@ -1,7 +1,6 @@
 if __name__ == "__main__":
     import os
 
-
     from vlagents.__main__ import _run_eval
     from vlagents.envs.interface import AgentConfig, EvalConfig
 

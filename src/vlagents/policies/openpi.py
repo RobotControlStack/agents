@@ -1,8 +1,10 @@
 import logging
 
 import numpy as np
+
 from vlagents import register_agent
 from vlagents.policies.interface import Act, Agent, Obs
+
 
 class OpenPiModel(Agent):
     def __init__(
@@ -48,5 +50,6 @@ class OpenPiModel(Agent):
         action_chunk = np.asarray(self.policy.infer(observation)["actions"], dtype=np.float32)
         action_chunk[:, -1] = 1 - action_chunk[:, -1]
         return self._chunk_act(robot_name, action_chunk[:, :-1], grippers=action_chunk[:, -1])
+
 
 register_agent("openpi", OpenPiModel)

@@ -1,7 +1,7 @@
-from vlagents.policies.interface import Agent
 AGENTS = {}
 
-def register_agent(name: str, agent_class: type[Agent]) -> None:
+
+def register_agent(name: str, agent_class: type["Agent"]) -> None:
     """
     Register an agent class with a given name.
 
@@ -11,6 +11,8 @@ def register_agent(name: str, agent_class: type[Agent]) -> None:
     """
     AGENTS[name] = agent_class
 
+
+from vlagents.policies.interface import Agent
 
 __version__ = "0.2.0"
 __all__ = ["__doc__", "__version__", "AGENTS"]

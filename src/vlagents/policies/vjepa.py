@@ -1,8 +1,9 @@
-
 import numpy as np
 from PIL import Image
+
 from vlagents import register_agent
 from vlagents.policies.interface import Act, Agent, Obs
+
 
 class VjepaAC(Agent):
     def __init__(
@@ -148,5 +149,6 @@ class VjepaAC(Agent):
             actions[:, -1] = 1 - actions[:, -1]
 
         return self._chunk_act(robot_name, actions[:, :-1], grippers=actions[:, -1])
+
 
 register_agent("vjepa_ac", VjepaAC)

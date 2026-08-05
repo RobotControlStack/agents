@@ -1,7 +1,8 @@
-
 import numpy as np
+
 from vlagents import register_agent
 from vlagents.policies.interface import Act, Agent, Obs
+
 
 class LeRobotPolicy(Agent):
     def __init__(
@@ -123,5 +124,6 @@ class LeRobotPolicy(Agent):
         if action_chunk.shape[-1] < 1:
             raise ValueError("LeRobot action chunk must include a gripper dimension")
         return self._chunk_act(robot_name, action_chunk[:, :-1], grippers=action_chunk[:, -1])
+
 
 register_agent("lerobot", LeRobotPolicy)

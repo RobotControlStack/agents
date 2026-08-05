@@ -6,6 +6,7 @@ import numpy as np
 from vlagents.envs.interface import EvalEnv
 from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
+
 class RCSDuoBench(EvalEnv):
     INSTRUCTIONS: ClassVar[dict[str, str]] = {}
 

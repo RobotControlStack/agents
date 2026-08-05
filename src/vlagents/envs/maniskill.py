@@ -9,6 +9,7 @@ import numpy as np
 from vlagents.envs.interface import EvalEnv
 from vlagents.policies.interface import Obs, SingleAct, SingleObs
 
+
 class HumanCameraWrapper(gym.ObservationWrapper):
     """
     Flattens the rgbd mode observations into a dictionary with two keys, "rgbd" and "state"
@@ -35,6 +36,7 @@ class HumanCameraWrapper(gym.ObservationWrapper):
         # observation["sensor_data"]["human_camera"] = dict(rgb=self.env.render())
         observation["sensor_data"]["base_camera"] = dict(rgb=self.env.render())
         return observation
+
 
 class ManiSkill(EvalEnv):
     INSTRUCTIONS: ClassVar[dict[str, str]] = {

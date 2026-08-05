@@ -1,4 +1,3 @@
-
 import datetime
 import json
 import logging
@@ -25,6 +24,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     level=logging.INFO,
 )
+
 
 def _write_camera_mp4(frames: list[np.ndarray], output_path: Path, fps: int = 30) -> None:
     if not frames:

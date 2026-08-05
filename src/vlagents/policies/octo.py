@@ -5,9 +5,9 @@ from functools import partial, reduce
 from operator import getitem
 
 import numpy as np
+
 from vlagents import register_agent
 from vlagents.policies.interface import Act, Agent, Obs
-
 
 
 class OctoModel(Agent):
@@ -117,5 +117,6 @@ class OctoModel(Agent):
         )
         action_chunk = np.asarray(actions[0, :, :], dtype=np.float32)
         return self._chunk_act(robot_name, action_chunk[:, :-1], grippers=action_chunk[:, -1])
+
 
 register_agent("octo", OctoModel)

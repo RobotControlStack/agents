@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import simplejpeg
+
 from vlagents import register_agent
 
 
@@ -231,14 +232,4 @@ class TestAgent(Agent):
         return a
 
 
-
-
-
-
-
-
-
-
-
 register_agent("test", TestAgent)
-

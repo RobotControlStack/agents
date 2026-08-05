@@ -15,9 +15,9 @@ import wandb
 # when started from jupyter notebook
 os.environ["MPLBACKEND"] = "Agg"
 
+from vlagents import AGENTS
 from vlagents.envs.interface import AgentConfig, EvalConfig
 from vlagents.eval import evaluation, write_results
-from vlagents import AGENTS
 from vlagents.server import AgentService
 
 main_app = typer.Typer(help="CLI tool for the vlagents library.")

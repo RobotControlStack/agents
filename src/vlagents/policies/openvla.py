@@ -6,8 +6,10 @@ from typing import Union
 
 import numpy as np
 from PIL import Image
+
 from vlagents import register_agent
 from vlagents.policies.interface import Act, Agent, Obs
+
 
 class OpenVLAModel(Agent):
     # === Utilities ===
